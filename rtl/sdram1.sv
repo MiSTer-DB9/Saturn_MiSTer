@@ -15,6 +15,7 @@ module sdram1
 	// cpu/chipset interface
 	input             init,			// init signal after FPGA config to initialize RAM
 	input             clk,			// sdram is accessed at up to 128MHz
+	input             clk_sdram,
 	input             sync,			//
 
 	input      [20:1] addr_a0,
@@ -415,7 +416,7 @@ module sdram1
 	(
 		.datain_h(1'b0),
 		.datain_l(1'b1),
-		.outclock(clk),
+		.outclock(clk_sdram),
 		.dataout(SDRAM_CLK),
 		.aclr(1'b0),
 		.aset(1'b0),

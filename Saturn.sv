@@ -442,13 +442,14 @@ module emu
 //	end
 
 	///////////////////////////////////////////////////
-	wire clk_sys, clk_ram, locked;
+	wire clk_sys, clk_ram, clk_sdram, locked;
 	pll pll
 	(
 		.refclk(CLK_50M),
 		.rst(0),
 		.outclk_0(clk_sys),
 		.outclk_1(clk_ram),
+		.outclk_2(clk_sdram),
 		.reconfig_to_pll(reconfig_to_pll),
 		.reconfig_from_pll(reconfig_from_pll), 
 		.locked(locked)
@@ -489,9 +490,13 @@ module emu
 		
 		resd  <= reset;
 		resd2 <= resd;
-	
+
 		if (dotsel2 != dotsel || pald2 != pald || (resd && !resd2)) state <= 1;
 	
+	// Direccion 4: valor entero de M: se forma como la suma del valor que hay en 15:8 + 7:0
+	// Direccion 7: valor fraccionario K que se suma a M. K = valor / 2^32
+	// El valor de N está fijado a 1, y el de C es 8 para el reloj 0, y 4 para los relojes 1 y 2
+	// 
 		cfg_write <= 0;
 		if (!cfg_waitrequest) begin
 			if (state) state <= state + 1'd1;
@@ -503,13 +508,13 @@ module emu
 					end
 				3: begin
 						cfg_address <= 4;
-						cfg_data <= !dotsel2 ? 32'h00000404 : 32'h00020504;
+						cfg_data <= !dotsel2 ? 32'h00000404 : 32'h00020504;  // 8 y 9 respectivamente
 						cfg_write <= 1;
 					end
 				5: begin
 						cfg_address <= 7;
-						cfg_data <= !pald2 ? (!dotsel2 ? 32'h96F21F6D : 32'h29E3FEC3) :
-						                     (!dotsel2 ? 32'h8A3D70A4 : 32'h1999999A);
+						cfg_data <= !pald2 ? (!dotsel2 ? 32'h96F21F6D : 32'h29E3FEC3) :  // frecuencias: 53.6852 y 57.272719 MHz
+						                     (!dotsel2 ? 32'h8A3D70A4 : 32'h1999999A);   // frecuencias: 53.3752 y 56.875 MHz
 						cfg_write <= 1;
 					end
 				7: begin
@@ -683,12 +688,12 @@ module emu
 	
 	reg [31:0] in_clk;
 	always @(posedge clk_sys) 
-		in_clk <= !PAL ? (!SMPC_DOTSEL ? 53685200 : 57272720) :
+		in_clk <= !PAL ? (!SMPC_DOTSEL ? 53685200 : 57272719) :
 	                    (!SMPC_DOTSEL ? 53375000 : 56875000);
 
 	
 	wire SMPC_CE;		//SMPC clock 4.0000MHz
-	CEGen SMPC_CEGen
+	cegen_v2 SMPC_CEGen
 	(
 		.CLK(clk_sys),
 		.RST_N(1),
@@ -698,7 +703,7 @@ module emu
 	);
 	
 	wire SCSP_CE;		//SCSP clock 22.5792MHz
-	CEGen SCSP_CEGen
+	cegen_v2 SCSP_CEGen
 	(
 		.CLK(clk_sys),
 		.RST_N(1),
@@ -708,7 +713,7 @@ module emu
 	);
 	
 	wire CD_CE;			//CD clock freq 20.000MHz
-	CEGen CD_CEGen
+	cegen_v2 CD_CEGen
 	(
 		.CLK(clk_sys),
 		.RST_N(1),
@@ -718,7 +723,7 @@ module emu
 	);
 	
 	wire CDD_2X_CE;	//CD data clock 44.1kHz x 2(channel) x 2(speed)
-	CEGen CDD_CEGen
+	cegen_v2 CDD_CEGen
 	(
 		.CLK(clk_sys),
 		.RST_N(1),
@@ -936,6 +941,7 @@ module emu
 		.SDRAM_CKE(SDRAM_CKE),
 		
 		.clk(clk_ram),
+		.clk_sdram(clk_sdram),
 		.init(reset),
 		.sync(DCE_R),
 	
