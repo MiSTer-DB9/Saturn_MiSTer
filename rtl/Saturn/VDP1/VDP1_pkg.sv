@@ -182,8 +182,8 @@ package VDP1_PKG;
 	
 	typedef struct packed
 	{
-		bit [11: 0] X;
-		bit [11: 0] Y;
+		bit [12: 0] X;
+		bit [12: 0] Y;
 	} Vertex_t;
 	parameter Vertex_t VERT_NULL = {12'h000,12'h000};
 	
@@ -278,6 +278,38 @@ package VDP1_PKG;
 		bit [ 4: 0] R;
 	} RGB_t;
 	
+	typedef struct packed
+	{
+		bit         DIR;
+		bit [ 4: 0] INT;
+		bit [12: 0] FRAC;
+	} ColorFP_t;
+	
+	typedef struct packed
+	{
+		ColorFP_t  B;
+		ColorFP_t  G;
+		ColorFP_t  R;
+	} RGBFP_t;
+	
+	function RGBFP_t RGBItoF(input RGB_t CI);
+		RGBFP_t CF;
+		
+		CF.R = {1'b0,CI.R,13'b0000000000000};
+		CF.G = {1'b0,CI.G,13'b0000000000000};
+		CF.B = {1'b0,CI.B,13'b0000000000000};
+		return CF;
+	endfunction
+	
+	function RGB_t RGBFtoI(input RGBFP_t CF);
+		RGB_t CI;
+		
+		CI.R = CF.R.INT;
+		CI.G = CF.G.INT;
+		CI.B = CF.B.INT;
+		return CI;
+	endfunction
+	
 	function RGB_t ColorHalf(input RGB_t CA);
 		RGB_t CH;
 		
@@ -343,11 +375,11 @@ package VDP1_PKG;
 		return {MSB,S};
 	endfunction
 
-	function bit [10:0] Abs(input bit [11:0] C);
-		bit [11:0] abs; 
+	function bit [12:0] Abs(input bit [13:0] C);
+		bit [13:0] abs; 
 		
 		abs = $signed(C) >= 0 ? $signed(C) : -$signed(C);
-		return abs[10:0];
+		return abs[12:0];
 	endfunction
 	
 endpackage
