@@ -4,7 +4,9 @@ set_global_assignment -name QIP_FILE rtl/SH/SH7034/SH7034.qip
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/SH_mem.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/SH7604_mem.sv
 set_global_assignment -name QIP_FILE rtl/Saturn/Saturn.qip
-set_global_assignment -name VERILOG_FILE rtl/cegen_v2.v
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/Saturn/STVIO.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/Saturn/93C45.sv
+set_global_assignment -name VHDL_FILE rtl/CEGen.vhd
 set_global_assignment -name VHDL_FILE rtl/bram.vhd
 set_global_assignment -name VHDL_FILE rtl/mlab.vhd
 set_global_assignment -name VERILOG_FILE rtl/hps_ext.v
@@ -13,7 +15,9 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/sdram2.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/ddram.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/vdp1_fb.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/hps2pad.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/ps2mouse.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/lightgun.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/cofi.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/hps2cdd.sv
 set_global_assignment -name SDC_FILE Saturn.sdc
 set_global_assignment -name SYSTEMVERILOG_FILE Saturn.sv
-
