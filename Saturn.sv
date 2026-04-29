@@ -177,7 +177,10 @@ module emu
 
 
 // [MiSTer-DB9 BEGIN] - DB9/SNAC8 support: USER_PP default (port_batch replaces with USER_PP_DRIVE)
-assign USER_PP = USER_PP_DRIVE;
+// Standalone SNAC (status[27], Pad 1 SNAC=ON) bypasses joydb and drives USER_OUT
+// directly from SMPC_PDR1O. Saturn pad needs push-pull on S0 (pin 2), TH (pin 4)
+// and S1 (pin 6) for reliable scan timing — same mask as the joydb Saturn helper.
+assign USER_PP = status[27] ? 8'b01010100 : USER_PP_DRIVE;
 // [MiSTer-DB9 END]
 	assign ADC_BUS  = 'Z;
 
@@ -777,7 +780,9 @@ joydb joydb (
 	always @(posedge clk_sys) begin
 		if (snac) begin
 			USERJOYSTICK <= {USER_IN[4], USER_IN[6], USER_IN[2], USER_IN[3], USER_IN[5], USER_IN[0], USER_IN[1]};//TH, C(TR), B(TL), R, L, D, U
-			USER_OUT <= {USERJOYSTICKOUT[5], USERJOYSTICKOUT[2], USERJOYSTICKOUT[6], USERJOYSTICKOUT[3], USERJOYSTICKOUT[4], USERJOYSTICKOUT[0], USERJOYSTICKOUT[1]};
+			// [MiSTer-DB9 BEGIN] - keep USER_OUT[7] idle high (SNAC standalone uses pins 0..6 only)
+			USER_OUT <= {1'b1, USERJOYSTICKOUT[5], USERJOYSTICKOUT[2], USERJOYSTICKOUT[6], USERJOYSTICKOUT[3], USERJOYSTICKOUT[4], USERJOYSTICKOUT[0], USERJOYSTICKOUT[1]};
+			// [MiSTer-DB9 END]
 		end else begin
 			// [MiSTer-DB9 BEGIN] - SerJoystick relay falls through to joydb USER_OUT_DRIVE
 			USER_OUT <= USER_OUT_DRIVE;
