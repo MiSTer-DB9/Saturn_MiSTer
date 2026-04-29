@@ -27,7 +27,11 @@
 // VDNUM 1..10
 // BLKSZ 0..7: 0 = 128, 1 = 256, 2 = 512(default), .. 7 = 16384
 //
-module hps_io #(parameter CONF_STR, CONF_STR_BRAM=0, PS2DIV=0, WIDE=0, VDNUM=1, BLKSZ=2, PS2WE=0, STRLEN=$size(CONF_STR)>>3)
+module hps_io #(parameter CONF_STR, CONF_STR_BRAM=0, PS2DIV=0, WIDE=0, VDNUM=1, BLKSZ=2, PS2WE=0, STRLEN=$size(CONF_STR)>>3,
+// [MiSTer-DB9-Pro BEGIN] - key gate bypass (cores whose native pad path makes UserIO Saturn redundant set =1; e.g. Saturn core has SNAC)
+BYPASS_DB9_KEY_GATE=0
+// [MiSTer-DB9-Pro END]
+)
 (
 	input             clk_sys,
 	inout      [48:0] HPS_BUS,
@@ -723,15 +727,28 @@ end
 // `cmd` is declared inside the `uio_block` named always block, so reach
 // into it via SystemVerilog hierarchical name. Bare `cmd` would auto-
 // elaborate as an undriven 1-bit wire and the whole gate would be DCE'd.
-db9_key_gate #(
-	.MASTER_ROOT(`MASTER_ROOT)
-) u_db9_key_gate (
-	.clk             (clk_sys),
-	.cmd_db9         (uio_block.cmd == 16'hFE),
-	.byte_cnt        (byte_cnt[5:0]),
-	.io_din          (io_din),
-	.saturn_unlocked (saturn_unlocked)
-);
+//
+// BYPASS_DB9_KEY_GATE=1 elides the SipHash + MAC compare (~518 ALMs) for
+// cores whose native pad path already exposes Saturn pad reading without
+// any gate (e.g. Saturn core's SNAC mode), so the gate would protect
+// nothing not already free. saturn_unlocked is forced high so the joydb
+// Saturn arm works irrespective of db9pro.key.
+generate
+if (BYPASS_DB9_KEY_GATE) begin : g_db9_key_bypass
+	assign saturn_unlocked = 1'b1;
+end
+else begin : g_db9_key_gate
+	db9_key_gate #(
+		.MASTER_ROOT(`MASTER_ROOT)
+	) u_db9_key_gate (
+		.clk             (clk_sys),
+		.cmd_db9         (uio_block.cmd == 16'hFE),
+		.byte_cnt        (byte_cnt[5:0]),
+		.io_din          (io_din),
+		.saturn_unlocked (saturn_unlocked)
+	);
+end
+endgenerate
 // [MiSTer-DB9-Pro END]
 
 endmodule

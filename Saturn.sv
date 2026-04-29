@@ -468,33 +468,9 @@ joydb joydb (
 	wire [31:0] joystick_4 = joydb_2ena ? joystick_2_USB : joydb_1ena ? joystick_3_USB : joystick_4_USB;
 
 
-	//----BA 9876543210
-	//----MS ZYXCBAUDLR
-	reg [15:0] JOYDB9MD_1,JOYDB9MD_2;
-	joy_db9md joy_db9md
-	(
-	.clk       ( CLK_JOY    ), //40-50MHz
-	.joy_split ( JOY_SPLIT  ),
-	.joy_mdsel ( JOY_MDSEL  ),
-	.joy_in    ( JOY_MDIN   ),
-	.joystick1 ( JOYDB9MD_1 ),
-	.joystick2 ( JOYDB9MD_2 )
-	);
-
-	//----BA 9876543210
-	//----LS FEDCBAUDLR
-	reg [15:0] JOYDB15_1,JOYDB15_2;
-	joy_db15 joy_db15
-	(
-	.clk       ( CLK_JOY   ), //48MHz
-	.JOY_CLK   ( JOY_CLK   ),
-	.JOY_DATA  ( JOY_DATA  ),
-	.JOY_LOAD  ( JOY_LOAD  ),
-	.joystick1 ( JOYDB15_1 ),
-	.joystick2 ( JOYDB15_2 )
-	);
-
-	hps_io #(.CONF_STR(CONF_STR), .WIDE(1), .VDNUM(2)) hps_io
+	// [MiSTer-DB9-Pro BEGIN] - bypass SipHash key gate: Saturn core's SNAC mode (status[27]) already exposes Saturn pad reading without gating, so the gate would protect nothing extra here (~518 ALMs reclaimed)
+	hps_io #(.CONF_STR(CONF_STR), .WIDE(1), .VDNUM(2), .BYPASS_DB9_KEY_GATE(1)) hps_io
+	// [MiSTer-DB9-Pro END]
 	(
 		.clk_sys(clk_sys),
 		.HPS_BUS(HPS_BUS),
