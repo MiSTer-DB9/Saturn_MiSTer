@@ -177,10 +177,12 @@ module emu
 
 
 // [MiSTer-DB9 BEGIN] - DB9/SNAC8 support: USER_PP default (port_batch replaces with USER_PP_DRIVE)
-// Standalone SNAC (status[27], Pad 1 SNAC=ON) bypasses joydb and drives USER_OUT
-// directly from SMPC_PDR1O. Saturn pad needs push-pull on S0 (pin 2), TH (pin 4)
-// and S1 (pin 6) for reliable scan timing — same mask as the joydb Saturn helper.
-assign USER_PP = status[27] ? 8'b01010100 : USER_PP_DRIVE;
+// Standalone SNAC (status[27]=ON) bypasses joydb and drives USER_OUT from the
+// SMPC port currently being scanned. UserIO Players=2P (status[125]) extends
+// SNAC to the 74HC157D 2P adapter. Saturn pad needs push-pull on S0 (pin 2),
+// TH (pin 4) and S1 (pin 6); the 2P adapter additionally uses pin 3
+// (USER_IO[2]) as mux SEL — same push-pull mask covers all three.
+assign USER_PP = snac ? 8'b01010100 : USER_PP_DRIVE;
 // [MiSTer-DB9 END]
 	assign ADC_BUS  = 'Z;
 
@@ -385,7 +387,7 @@ joydb joydb (
 		"P2-;",
 `ifndef STV_BUILD
 		"P2O[76],Swap Joysticks,No,Yes;",
-		"P2O[27],Pad 1 SNAC,OFF,ON;",
+		"P2O[27],Saturn SNAC,OFF,ON;",
 		"P2-;",
 		"D5P2O[17:15],Pad 1,Digital,Virt LGun,Wheel,Mission Stick,3D Pad,Dual Mission,Mouse,Off;",
 		"P2-;",
@@ -754,22 +756,48 @@ joydb joydb (
 	wire [13:0] joy2 = ~joystick_1[13:0];
 `endif
 
-	wire snac = status[27];
-	reg  [6:0] USERJOYSTICK;
-	wire [6:0] USERJOYSTICKOUT;
+	// [MiSTer-DB9 BEGIN] - SNAC mode decode (2P piggy-backs UserIO Players bit)
+	wire snac    = status[27];
+	wire snac_2p = snac & status[125];
+	// [MiSTer-DB9 END]
+
+	// [MiSTer-DB9 BEGIN] - 2P split-select tracker (74HC157D mux SEL on USER_IO[2])
+	// SMPC writes PDR_O at port-scan-start; PORT_DELAY (~10us) before SMPC reads
+	// PDR_I gives ample margin for clk_sys reg + 74HC157D propagation (<50ns).
+	reg        snac_split;
+	reg  [6:0] last_pdr1o, last_pdr2o;
+	always @(posedge clk_sys) begin
+		last_pdr1o <= SMPC_PDR1O;
+		last_pdr2o <= SMPC_PDR2O;
+		if (~snac_2p)                       snac_split <= 1'b0;
+		else if (SMPC_PDR1O != last_pdr1o)  snac_split <= 1'b0;
+		else if (SMPC_PDR2O != last_pdr2o)  snac_split <= 1'b1;
+	end
+	// [MiSTer-DB9 END]
+
+	// [MiSTer-DB9 BEGIN] - per-port USER_IN latches + active-port USER_OUT mux
+	reg  [6:0] USERJOYSTICK_P1, USERJOYSTICK_P2;
+	wire [6:0] snac_pdrO_active = snac_split ? SMPC_PDR2O : SMPC_PDR1O;
+	wire [6:0] user_in_remap    = {USER_IN[4], USER_IN[6], USER_IN[2], USER_IN[3], USER_IN[5], USER_IN[0], USER_IN[1]};
 	always @(posedge clk_sys) begin
 		if (snac) begin
-			USERJOYSTICK <= {USER_IN[4], USER_IN[6], USER_IN[2], USER_IN[3], USER_IN[5], USER_IN[0], USER_IN[1]};//TH, C(TR), B(TL), R, L, D, U
-			// [MiSTer-DB9 BEGIN] - keep USER_OUT[7] idle high (SNAC standalone uses pins 0..6 only)
-			USER_OUT <= {1'b1, USERJOYSTICKOUT[5], USERJOYSTICKOUT[2], USERJOYSTICKOUT[6], USERJOYSTICKOUT[3], USERJOYSTICKOUT[4], USERJOYSTICKOUT[0], USERJOYSTICKOUT[1]};
-			// [MiSTer-DB9 END]
+			// USER_OUT[2] carries the 74HC157D mux SEL in 2P mode; the
+			// displaced PDR_O[4] (Saturn TL drive) is unused by the adapter.
+			USER_OUT <= {1'b1,
+			             snac_pdrO_active[5],
+			             snac_pdrO_active[2],
+			             snac_pdrO_active[6],
+			             snac_pdrO_active[3],
+			             snac_2p ? snac_split : snac_pdrO_active[4],
+			             snac_pdrO_active[0],
+			             snac_pdrO_active[1]};
+			if (~snac_split) USERJOYSTICK_P1 <= user_in_remap;
+			else             USERJOYSTICK_P2 <= user_in_remap;
 		end else begin
-			// [MiSTer-DB9 BEGIN] - SerJoystick relay falls through to joydb USER_OUT_DRIVE
 			USER_OUT <= USER_OUT_DRIVE;
-			// [MiSTer-DB9 END]
-			//USER_OUT <= '1;
 		end
 	end
+	// [MiSTer-DB9 END]
 	
 	
 	wire [24: 0] MEM_A;
@@ -1021,14 +1049,14 @@ joydb joydb (
 		.SMPC_AREA(area_code),
 		.SMPC_DOTSEL(SMPC_DOTSEL),
 `ifndef STV_BUILD
-		.SMPC_PDR1I(snac ? USERJOYSTICK : SMPC_PDR1I),
+		.SMPC_PDR1I(snac ? USERJOYSTICK_P1 : SMPC_PDR1I),
 `else
 		.SMPC_PDR1I(7'h5C),
 `endif
 		.SMPC_PDR1O(SMPC_PDR1O),
 		.SMPC_DDR1(SMPC_DDR1),
 `ifndef STV_BUILD
-		.SMPC_PDR2I(SMPC_PDR2I),
+		.SMPC_PDR2I(snac_2p ? USERJOYSTICK_P2 : SMPC_PDR2I),
 `else
 		.SMPC_PDR2I({6'b111111,STV_EEP_DO}),
 `endif
@@ -1227,9 +1255,7 @@ joydb joydb (
 		.MEM_DO(STV_EEP_MEM_DO)
 	);
 `endif
-	
-	assign USERJOYSTICKOUT = SMPC_PDR1O;	
-	
+
 `ifndef STV_BUILD
 	HPS2PAD PAD
 	(
