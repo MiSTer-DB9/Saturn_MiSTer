@@ -388,6 +388,7 @@ joydb joydb (
 `ifndef STV_BUILD
 		"P2O[76],Swap Joysticks,No,Yes;",
 		"P2O[27],Saturn SNAC,OFF,ON;",
+		"P2O[125],SNAC Players, 1 Player,2 Players;",
 		"P2-;",
 		"D5P2O[17:15],Pad 1,Digital,Virt LGun,Wheel,Mission Stick,3D Pad,Dual Mission,Mouse,Off;",
 		"P2-;",
