@@ -762,8 +762,9 @@ joydb joydb (
 	// [MiSTer-DB9 END]
 
 	// [MiSTer-DB9 BEGIN] - 2P split-select tracker (74HC157D mux SEL on USER_IO[2])
-	// SMPC writes PDR_O at port-scan-start; PORT_DELAY (~10us) before SMPC reads
-	// PDR_I gives ample margin for clk_sys reg + 74HC157D propagation (<50ns).
+	// Tracks which logical port SMPC is currently scanning. SEL on USER_OUT[2] is
+	// XOR'd with status[76] (Swap Joysticks) so physical jacks map to opposite
+	// logical players without disturbing scan order or buffer capture.
 	reg        snac_split;
 	reg  [6:0] last_pdr1o, last_pdr2o;
 	always @(posedge clk_sys) begin
@@ -781,14 +782,16 @@ joydb joydb (
 	wire [6:0] user_in_remap    = {USER_IN[4], USER_IN[6], USER_IN[2], USER_IN[3], USER_IN[5], USER_IN[0], USER_IN[1]};
 	always @(posedge clk_sys) begin
 		if (snac) begin
-			// USER_OUT[2] carries the 74HC157D mux SEL in 2P mode; the
-			// displaced PDR_O[4] (Saturn TL drive) is unused by the adapter.
+			// USER_OUT[2] = 74HC157D mux SEL. Polarity 1=P1 jack, 0=P2 jack
+			// (per adapter); XOR with status[76] swaps physical-to-logical
+			// mapping. snac_split is forced to 0 in 1P mode so the same
+			// expression covers 1P (with adapter installed) and 2P.
 			USER_OUT <= {1'b1,
 			             snac_pdrO_active[5],
 			             snac_pdrO_active[2],
 			             snac_pdrO_active[6],
 			             snac_pdrO_active[3],
-			             snac_2p ? snac_split : snac_pdrO_active[4],
+			             ~(snac_split ^ status[76]),
 			             snac_pdrO_active[0],
 			             snac_pdrO_active[1]};
 			if (~snac_split) USERJOYSTICK_P1 <= user_in_remap;
