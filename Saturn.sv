@@ -830,16 +830,16 @@ joydb joydb (
 		end else
 		// [MiSTer-DB9-Pro END]
 		if (snac) begin
-			// USER_OUT[2] = 74HC157D mux SEL. Polarity 1=P1 jack, 0=P2 jack
-			// (per adapter); XOR with status[76] swaps physical-to-logical
-			// mapping. snac_split is forced to 0 in 1P mode so the same
-			// expression covers 1P (with adapter installed) and 2P.
+			// USER_OUT[2] = 74HC157D mux SEL. Polarity 0=P1 jack (A inputs),
+			// 1=P2 jack (B inputs); XOR with status[76] swaps physical-to-
+			// logical mapping. snac_split is forced to 0 in 1P mode so the
+			// same expression covers 1P (with adapter installed) and 2P.
 			USER_OUT <= {1'b1,
 			             snac_pdrO_active[5],
 			             snac_pdrO_active[2],
 			             snac_pdrO_active[6],
 			             snac_pdrO_active[3],
-			             ~(snac_split ^ status[76]),
+			             snac_split ^ status[76],
 			             snac_pdrO_active[0],
 			             snac_pdrO_active[1]};
 			if (~snac_split) USERJOYSTICK_P1 <= user_in_remap;
