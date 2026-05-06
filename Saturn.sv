@@ -792,17 +792,20 @@ joydb joydb (
 	// [MiSTer-DB9-Pro END]
 
 	// [MiSTer-DB9 BEGIN] - 2P split-select tracker (74HC157D mux SEL on USER_IO[2])
-	// Tracks which logical port SMPC is currently scanning. SEL on USER_OUT[2] is
-	// XOR'd with status[76] (Swap Joysticks) so physical jacks map to opposite
-	// logical players without disturbing scan order or buffer capture.
+	// Detects writes to each port's {DDR, PDR_O} to track which port SMPC is
+	// scanning. DDR change at PS_ID1_0 settles snac_split before the first
+	// PDR_I read at PS_ID1_1; PDR_O covers IOSEL=1 direct-PDR mode. PDR_O
+	// alone is not enough -- PS_START / PS_ID1_0 re-write the value already
+	// latched at end of the previous scan. SEL is XOR'd with status[76]
+	// (Swap Joysticks) for physical-to-logical mapping.
 	reg        snac_split;
-	reg  [6:0] last_pdr1o, last_pdr2o;
+	reg [13:0] last_p1, last_p2;
 	always @(posedge clk_sys) begin
-		last_pdr1o <= SMPC_PDR1O;
-		last_pdr2o <= SMPC_PDR2O;
-		if (~snac_2p)                       snac_split <= 1'b0;
-		else if (SMPC_PDR1O != last_pdr1o)  snac_split <= 1'b0;
-		else if (SMPC_PDR2O != last_pdr2o)  snac_split <= 1'b1;
+		last_p1 <= {SMPC_DDR1, SMPC_PDR1O};
+		last_p2 <= {SMPC_DDR2, SMPC_PDR2O};
+		if (~snac_2p)                                snac_split <= 1'b0;
+		else if ({SMPC_DDR1, SMPC_PDR1O} != last_p1) snac_split <= 1'b0;
+		else if ({SMPC_DDR2, SMPC_PDR2O} != last_p2) snac_split <= 1'b1;
 	end
 	// [MiSTer-DB9 END]
 
