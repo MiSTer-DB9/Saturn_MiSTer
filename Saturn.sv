@@ -182,8 +182,9 @@ module emu
 // SNAC to the 74HC157D 2P adapter. Saturn pad needs push-pull on S0 (pin 2),
 // TH (pin 4) and S1 (pin 6); the 2P adapter additionally uses pin 3
 // (USER_IO[2]) as mux SEL — same push-pull mask covers all three.
-// [MiSTer-DB9-Pro BEGIN] - Stunner SNAC: open-drain on S0/S1/TL so gun pulls win
-assign USER_PP = snac_stunner_p1 ? 8'b00000000
+// [MiSTer-DB9-Pro BEGIN] - Stunner: open-drain so gun pulls win; 2P-mod also
+// drives USER_IO[2] = 74HC157D mux SEL push-pull to select the gun's jack.
+assign USER_PP = snac_stunner_p1 ? {5'b0, snac_stunner_2p_mod, 2'b0}
                : snac             ? 8'b01010100
                :                    USER_PP_DRIVE;
 // [MiSTer-DB9-Pro END]
@@ -828,7 +829,9 @@ joydb joydb (
 		// PAD_VIRT_LGUN bit assignment. Stunner D-lines hardwired (MD_ID=4'hA)
 		// so SMPC's PS_ID1 TH-toggle is irrelevant; safe to ignore PDR_O entirely.
 		if (snac_stunner_p1) begin
-			USER_OUT <= 8'hFF;
+			// 2P-mod: USER_OUT[2] = mux SEL, drive low (XOR status[76] for
+			// Swap) to select gun's jack. 1P splitter: USER_IO[2] = TL input.
+			USER_OUT <= {5'b11111, snac_stunner_2p_mod ? status[76] : 1'b1, 2'b11};
 			USERJOYSTICK_P1 <= user_in_remap_stunner;
 		end else
 		// [MiSTer-DB9-Pro END]
