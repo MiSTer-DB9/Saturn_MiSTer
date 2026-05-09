@@ -182,9 +182,16 @@ module emu
 // SNAC to the 74HC157D 2P adapter. Saturn pad needs push-pull on S0 (pin 2),
 // TH (pin 4) and S1 (pin 6); the 2P adapter additionally uses pin 3
 // (USER_IO[2]) as mux SEL — same push-pull mask covers all three.
+// 3D Controller mode (1P passive adapter only) overrides IO[2] to open-drain
+// so the pad's open-collector TL handshake line is not shorted; SMPC then
+// drives TL via PDR_O[4]. Default 1P SNAC keeps IO[2] push-pull so the same
+// scan pattern works on both 1P passive (TL ignored by 6-button pads) and 2P
+// adapters (mux SEL needs hard drive); user selects "3D Controller" only when
+// physically connecting a 3D Control Pad to a 1P passive SNAC adapter.
 // [MiSTer-DB9-Pro BEGIN] - Stunner: open-drain so gun pulls win; 2P-mod also
 // drives USER_IO[2] = 74HC157D mux SEL push-pull to select the gun's jack.
 assign USER_PP = snac_stunner_p1 ? {5'b0, snac_stunner_2p_mod, 2'b0}
+               : snac_3d_pad      ? 8'b01010000
                : snac             ? 8'b01010100
                :                    USER_PP_DRIVE;
 // [MiSTer-DB9-Pro END]
@@ -394,11 +401,13 @@ joydb joydb (
 		"P2O[76],Swap Joysticks,No,Yes;",
 		"P2O[27],Saturn SNAC,OFF,ON;",
 		"P2O[125],SNAC Players, 1 Player,2 Players;",
-		// [MiSTer-DB9-Pro BEGIN] - Stunner SNAC P1 device selector (D9 hides
-		// when key absent, when SNAC off, or when 2P mode active). 2 bits pick
-		// adapter so TL routing matches physical wiring; the unselectable 2'b11
-		// state falls back to Saturn Pad behavior in RTL.
-		"D9P2O[124:123],SNAC P1 Device,Saturn Pad,Stunner (1P splitter),Stunner (2P mod);",
+		// [MiSTer-DB9-Pro BEGIN] - SNAC P1 device selector (D9 hides when key
+		// absent, when SNAC off, or when 2P mode active — all four options are
+		// 1P-only). 2 bits pick adapter so TL/SEL routing on USER_IO[2] matches
+		// physical wiring + pad protocol: Saturn Pad / Stunner share IO[2]
+		// drive; 3D Controller releases IO[2] (open-drain) so SMPC's PS_ID5_*
+		// / PS_ANALOG_* state machine can drive the pad's TL handshake line.
+		"D9P2O[124:123],SNAC P1 Device,Saturn Pad,Stunner (1P splitter),Stunner (2P mod),3D Controller;",
 		// [MiSTer-DB9-Pro END]
 		"P2-;",
 		"D5P2O[17:15],Pad 1,Digital,Virt LGun,Wheel,Mission Stick,3D Pad,Dual Mission,Mouse,Off;",
@@ -778,18 +787,25 @@ joydb joydb (
 	wire snac_2p = snac & status[125];
 	// [MiSTer-DB9 END]
 
-	// [MiSTer-DB9-Pro BEGIN] - Stunner SNAC P1 mode (1P only; 2P adapter reuses
-	// USER_IO[2] for 74HC157D mux SEL, so Stunner cannot share that wire).
-	// SENSOR (S0/USER_IO[4]) drives PDR1I[6] -> EXL_N -> VDP2 HV latch;
+	// [MiSTer-DB9-Pro BEGIN] - SNAC P1 device decode (1P only; 2P adapter reuses
+	// USER_IO[2] for 74HC157D mux SEL, so all four options are 1P-only).
+	// Stunner: SENSOR (S0/USER_IO[4]) drives PDR1I[6] -> EXL_N -> VDP2 HV latch;
 	// START (S1/USER_IO[6]) drives PDR1I[5]; TRIG (TL) drives PDR1I[4] from
 	// either USER_IO[2] (1P passive splitter wires DB9 pin 4 to Saturn pin 6)
 	// or USER_IO[7] (2P adapter mod: single jumper P1 jack pin 6 to DB9 pin 2).
-	// SNAC P1 Device encoding: 00=Saturn Pad, 01=Stunner 1P split, 10=Stunner 2P mod.
+	// 3D Controller: 1P passive adapter only. Saturn 3D Pad uses the 3-wire
+	// handshake protocol (TH/TR/TL) in BOTH Digital and Analog switch positions
+	// (header byte 0x02 / 0x16 — see Yabause SMPC docs / sonik-br/SaturnLib).
+	// IO[2] must be released so the pad's open-collector TL output is not
+	// shorted by the FPGA's default mux-SEL push-pull drive; SMPC's PS_ID5_* /
+	// PS_ANALOG_* state machine then drives TL via PDR_O[4].
+	// Encoding: 00=Saturn Pad, 01=Stunner 1P split, 10=Stunner 2P mod, 11=3D Controller.
 	wire snac_stunner_ena        = snac & saturn_unlocked & ~snac_2p;
 	wire [1:0] snac_p1_dev       = status[124:123];
 	wire snac_stunner_1p_spl     = snac_stunner_ena & (snac_p1_dev == 2'b01);
 	wire snac_stunner_2p_mod     = snac_stunner_ena & (snac_p1_dev == 2'b10);
 	wire snac_stunner_p1         = snac_stunner_1p_spl | snac_stunner_2p_mod;
+	wire snac_3d_pad             = snac_stunner_ena & (snac_p1_dev == 2'b11);
 	// [MiSTer-DB9-Pro END]
 
 	// [MiSTer-DB9 BEGIN] - 2P split-select tracker (74HC157D mux SEL on USER_IO[2])
@@ -836,16 +852,24 @@ joydb joydb (
 		end else
 		// [MiSTer-DB9-Pro END]
 		if (snac) begin
-			// USER_OUT[2] = 74HC157D mux SEL. Polarity 0=P1 jack (A inputs),
-			// 1=P2 jack (B inputs); XOR with status[76] swaps physical-to-
-			// logical mapping. snac_split is forced to 0 in 1P mode so the
-			// same expression covers 1P (with adapter installed) and 2P.
+			// USER_OUT[2] role depends on SNAC P1 Device selection:
+			//   3D Controller (1P only): TL handshake line, open-drain (USER_PP[2]=0).
+			//       Forward SMPC's PDR_O[4] so PS_ID5_*/PS_ANALOG_* states drive
+			//       TL on the wire; pad's open-collector TL output wins when
+			//       SMPC releases (PDR_O[4]=1). Required for 3D Control Pad in
+			//       both Digital (header 0x02) and Analog (header 0x16) switch
+			//       positions, since both use the Saturn 3-wire handshake.
+			//   Saturn Pad / default (1P or 2P): 74HC157D mux SEL push-pull.
+			//       Polarity 0=P1 jack (A inputs), 1=P2 jack (B inputs); XOR
+			//       status[76] swaps physical-to-logical mapping. snac_split is
+			//       forced to 0 in 1P mode so the same expression covers 1P
+			//       (passive adapter, IO[2] unused) and 2P (mux SEL).
 			USER_OUT <= {1'b1,
 			             snac_pdrO_active[5],
 			             snac_pdrO_active[2],
 			             snac_pdrO_active[6],
 			             snac_pdrO_active[3],
-			             snac_split ^ status[76],
+			             snac_3d_pad ? snac_pdrO_active[4] : (snac_split ^ status[76]),
 			             snac_pdrO_active[0],
 			             snac_pdrO_active[1]};
 			if (~snac_split) USERJOYSTICK_P1 <= user_in_remap;
