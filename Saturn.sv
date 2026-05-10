@@ -176,25 +176,17 @@ module emu
 );
 
 
-// [MiSTer-DB9 BEGIN] - DB9/SNAC8 support: USER_PP default (port_batch replaces with USER_PP_DRIVE)
-// Standalone SNAC (status[27]=ON) bypasses joydb and drives USER_OUT from the
-// SMPC port currently being scanned. UserIO Players=2P (status[125]) extends
-// SNAC to the 74HC157D 2P adapter. Saturn pad needs push-pull on S0 (pin 2),
-// TH (pin 4) and S1 (pin 6); the 2P adapter additionally uses pin 3
-// (USER_IO[2]) as mux SEL — same push-pull mask covers all three.
-// 3D Controller mode (1P passive adapter only) overrides IO[2] to open-drain
-// so the pad's open-collector TL handshake line is not shorted; SMPC then
-// drives TL via PDR_O[4]. Default 1P SNAC keeps IO[2] push-pull so the same
-// scan pattern works on both 1P passive (TL ignored by 6-button pads) and 2P
-// adapters (mux SEL needs hard drive); user selects "3D Controller" only when
-// physically connecting a 3D Control Pad to a 1P passive SNAC adapter.
-// [MiSTer-DB9-Pro BEGIN] - Stunner: open-drain so gun pulls win; 2P-mod also
-// drives USER_IO[2] = 74HC157D mux SEL push-pull to select the gun's jack.
-assign USER_PP = snac_stunner_p1 ? {5'b0, snac_stunner_2p_mod, 2'b0}
-               : snac_3d_pad      ? 8'b01010000
-               : snac             ? 8'b01010100
+// [MiSTer-DB9 BEGIN] - DB9/SNAC8 support: USER_PP default
+// All TH/TR/TL/D-line pins must be open-drain so a Stunner gun's open-collector
+// SENSOR (TH/IO[4]) and START (TR/IO[6]) outputs can pull low without contention
+// from the FPGA -- matches real Saturn SMPC's open-drain electrical behavior.
+// Digital 6-button and 3D Pad inputs see clean transitions via FPGA internal
+// pull-ups (~25kOhm × ~50pF -> ~125ns settle, vs Saturn scan ~143us/phase).
+// Only IO[2] differs: in 2P-with-mux mode it must be push-pull to drive the
+// 74HC157D mux SEL; in 1P passive it stays open-drain (TL line).
+assign USER_PP = snac_mux_adapter ? 8'b00000100
+               : snac             ? 8'b00000000
                :                    USER_PP_DRIVE;
-// [MiSTer-DB9-Pro END]
 // [MiSTer-DB9 END]
 	assign ADC_BUS  = 'Z;
 
@@ -401,14 +393,7 @@ joydb joydb (
 		"P2O[76],Swap Joysticks,No,Yes;",
 		"P2O[27],Saturn SNAC,OFF,ON;",
 		"P2O[125],SNAC Players, 1 Player,2 Players;",
-		// [MiSTer-DB9-Pro BEGIN] - SNAC P1 device selector (D9 hides when key
-		// absent, when SNAC off, or when 2P mode active — all four options are
-		// 1P-only). 2 bits pick adapter so TL/SEL routing on USER_IO[2] matches
-		// physical wiring + pad protocol: Saturn Pad / Stunner share IO[2]
-		// drive; 3D Controller releases IO[2] (open-drain) so SMPC's PS_ID5_*
-		// / PS_ANALOG_* state machine can drive the pad's TL handshake line.
-		"D9P2O[124:123],SNAC P1 Device,Saturn Pad,Stunner (1P splitter),Stunner (2P mod),3D Controller;",
-		// [MiSTer-DB9-Pro END]
+		"P2O[123],SNAC Adapter, 1P passive,2P with mux;",
 		"P2-;",
 		"D5P2O[17:15],Pad 1,Digital,Virt LGun,Wheel,Mission Stick,3D Pad,Dual Mission,Mouse,Off;",
 		"P2-;",
@@ -564,14 +549,9 @@ joydb joydb (
 	);
 	
 `ifndef STV_BUILD
-	// [MiSTer-DB9-Pro BEGIN] - D9 hides Stunner SNAC P1 entry when key absent,
-	// SNAC off, or 2P active. Bit set = hidden (MiSTer CONF_STR convention).
-	assign menumask = {~snac_stunner_ena, (status[56:55] != 2'b00), ~lg_p2_ena, ~lg_p1_ena, snac, 1'b1, 1'b1, ~status[8], 1'b1, ~bk_ena};
-	// [MiSTer-DB9-Pro END]
+	assign menumask = {7'b0, (status[56:55] != 2'b00), ~lg_p2_ena, ~lg_p1_ena, snac, 1'b1, 1'b1, ~status[8], 1'b1, ~bk_ena};
 `else
-	// [MiSTer-DB9-Pro BEGIN] - D9 always hidden in STV (no SNAC P2 input section)
-	assign menumask = {1'b1, (status[56:55] != 2'b00), 1'b1, 1'b1, ~status[75], 1'b1, 1'b1, ~status[8], ~STV_ALTBIOS, 1'b0};
-	// [MiSTer-DB9-Pro END]
+	assign menumask = {7'b0, (status[56:55] != 2'b00), 1'b1, 1'b1, ~status[75], 1'b1, 1'b1, ~status[8], ~STV_ALTBIOS, 1'b0};
 `endif
 	
 	wire bios_download = ioctl_download & (ioctl_index[5:2] == 4'b0000 && ioctl_index[1:0] != 2'h3);
@@ -782,31 +762,15 @@ joydb joydb (
 	wire [13:0] joy2 = ~joystick_1[13:0];
 `endif
 
-	// [MiSTer-DB9 BEGIN] - SNAC mode decode (2P piggy-backs UserIO Players bit)
-	wire snac    = status[27];
-	wire snac_2p = snac & status[125];
+	// [MiSTer-DB9 BEGIN] - SNAC mode decode
+	// Adapter type and player count are independent: the FPGA cannot auto-detect
+	// adapter type because IO[2] serves two incompatible drive modes (TL line on
+	// 1P passive vs 74HC157D mux SEL on 2P with mux). Pad type (Saturn Pad /
+	// 3D Pad / Stunner) IS auto-detected by SMPC's PS_ID1_*/PS_ID5_*/PS_NOTHING_STUNNER.
+	wire snac             = status[27];
+	wire snac_mux_adapter = snac & status[123];   // 0 = 1P passive, 1 = 2P with 74HC157D mux
+	wire snac_2p          = snac & status[125];   // 0 = scan P1,    1 = SMPC alternates P1/P2
 	// [MiSTer-DB9 END]
-
-	// [MiSTer-DB9-Pro BEGIN] - SNAC P1 device decode (1P only; 2P adapter reuses
-	// USER_IO[2] for 74HC157D mux SEL, so all four options are 1P-only).
-	// Stunner: SENSOR (S0/USER_IO[4]) drives PDR1I[6] -> EXL_N -> VDP2 HV latch;
-	// START (S1/USER_IO[6]) drives PDR1I[5]; TRIG (TL) drives PDR1I[4] from
-	// either USER_IO[2] (1P passive splitter wires DB9 pin 4 to Saturn pin 6)
-	// or USER_IO[7] (2P adapter mod: single jumper P1 jack pin 6 to DB9 pin 2).
-	// 3D Controller: 1P passive adapter only. Saturn 3D Pad uses the 3-wire
-	// handshake protocol (TH/TR/TL) in BOTH Digital and Analog switch positions
-	// (header byte 0x02 / 0x16 — see Yabause SMPC docs / sonik-br/SaturnLib).
-	// IO[2] must be released so the pad's open-collector TL output is not
-	// shorted by the FPGA's default mux-SEL push-pull drive; SMPC's PS_ID5_* /
-	// PS_ANALOG_* state machine then drives TL via PDR_O[4].
-	// Encoding: 00=Saturn Pad, 01=Stunner 1P split, 10=Stunner 2P mod, 11=3D Controller.
-	wire snac_stunner_ena        = snac & saturn_unlocked & ~snac_2p;
-	wire [1:0] snac_p1_dev       = status[124:123];
-	wire snac_stunner_1p_spl     = snac_stunner_ena & (snac_p1_dev == 2'b01);
-	wire snac_stunner_2p_mod     = snac_stunner_ena & (snac_p1_dev == 2'b10);
-	wire snac_stunner_p1         = snac_stunner_1p_spl | snac_stunner_2p_mod;
-	wire snac_3d_pad             = snac_stunner_ena & (snac_p1_dev == 2'b11);
-	// [MiSTer-DB9-Pro END]
 
 	// [MiSTer-DB9 BEGIN] - 2P split-select tracker (74HC157D mux SEL on USER_IO[2])
 	// Detects writes to each port's {DDR, PDR_O} to track which port SMPC is
@@ -827,51 +791,26 @@ joydb joydb (
 	// [MiSTer-DB9 END]
 
 	// [MiSTer-DB9 BEGIN] - per-port USER_IN latches + active-port USER_OUT mux
+	// In 2P-mux mode PDR2I[4] aliases PDR1I[4] (only P1's TL is jumpered to
+	// IO[7] on the 2P-mod adapter). Benign: SMPC's MD_ID uses PDR_I[3:0] only,
+	// and PS_ID5_*/PS_ANALOG_* (the only states reading PDR_I[4]) require
+	// MD_ID=0x5 which P2's empty/digital jack won't produce.
 	reg  [6:0] USERJOYSTICK_P1, USERJOYSTICK_P2;
 	wire [6:0] snac_pdrO_active = snac_split ? SMPC_PDR2O : SMPC_PDR1O;
-	wire [6:0] user_in_remap    = {USER_IN[4], USER_IN[6], USER_IN[2], USER_IN[3], USER_IN[5], USER_IN[0], USER_IN[1]};
-	// [MiSTer-DB9-Pro BEGIN] - Stunner remap: bit [4]=TRIG sourced from the TL pin
-	// matching the user-selected adapter (USER_IN[2] for 1P passive splitter,
-	// USER_IN[7] for 2P-modded adapter). Other bits identical to user_in_remap.
-	wire [6:0] user_in_remap_stunner = {USER_IN[4], USER_IN[6],
-	                                    snac_stunner_2p_mod ? USER_IN[7] : USER_IN[2],
-	                                    USER_IN[3], USER_IN[5], USER_IN[0], USER_IN[1]};
-	// [MiSTer-DB9-Pro END]
+	wire       snac_tl_in       = snac_mux_adapter ? USER_IN[7] : USER_IN[2];
+	wire       io2_drive        = snac_mux_adapter ? (snac_split ^ status[76]) : snac_pdrO_active[4];
+	wire [6:0] user_in_remap    = {USER_IN[4], USER_IN[6], snac_tl_in,
+	                                USER_IN[3], USER_IN[5], USER_IN[0], USER_IN[1]};
 	always @(posedge clk_sys) begin
-		// [MiSTer-DB9-Pro BEGIN] - Stunner SNAC: release every line so gun's
-		// open-collector pulls win. user_in_remap_stunner feeds SENSOR (USER_IN[4])
-		// to PDR1I[6], START (USER_IN[6]) to PDR1I[5], and TRIG (USER_IN[2] or
-		// USER_IN[7] depending on adapter) to PDR1I[4] -- matches hps2pad.sv
-		// PAD_VIRT_LGUN bit assignment. Stunner D-lines hardwired (MD_ID=4'hA)
-		// so SMPC's PS_ID1 TH-toggle is irrelevant; safe to ignore PDR_O entirely.
-		if (snac_stunner_p1) begin
-			// 2P-mod: USER_OUT[2] = mux SEL, drive low (XOR status[76] for
-			// Swap) to select gun's jack. 1P splitter: USER_IO[2] = TL input.
-			USER_OUT <= {5'b11111, snac_stunner_2p_mod ? status[76] : 1'b1, 2'b11};
-			USERJOYSTICK_P1 <= user_in_remap_stunner;
-		end else
-		// [MiSTer-DB9-Pro END]
 		if (snac) begin
-			// USER_OUT[2] role depends on SNAC P1 Device selection:
-			//   3D Controller (1P only): TL handshake line, open-drain (USER_PP[2]=0).
-			//       Forward SMPC's PDR_O[4] so PS_ID5_*/PS_ANALOG_* states drive
-			//       TL on the wire; pad's open-collector TL output wins when
-			//       SMPC releases (PDR_O[4]=1). Required for 3D Control Pad in
-			//       both Digital (header 0x02) and Analog (header 0x16) switch
-			//       positions, since both use the Saturn 3-wire handshake.
-			//   Saturn Pad / default (1P or 2P): 74HC157D mux SEL push-pull.
-			//       Polarity 0=P1 jack (A inputs), 1=P2 jack (B inputs); XOR
-			//       status[76] swaps physical-to-logical mapping. snac_split is
-			//       forced to 0 in 1P mode so the same expression covers 1P
-			//       (passive adapter, IO[2] unused) and 2P (mux SEL).
-			USER_OUT <= {1'b1,
-			             snac_pdrO_active[5],
-			             snac_pdrO_active[2],
-			             snac_pdrO_active[6],
-			             snac_pdrO_active[3],
-			             snac_3d_pad ? snac_pdrO_active[4] : (snac_split ^ status[76]),
-			             snac_pdrO_active[0],
-			             snac_pdrO_active[1]};
+			USER_OUT <= {snac_pdrO_active[4],   // IO[7]: 2P-mod TL
+			             snac_pdrO_active[5],   // IO[6]: TR
+			             snac_pdrO_active[2],   // IO[5]: D2
+			             snac_pdrO_active[6],   // IO[4]: TH
+			             snac_pdrO_active[3],   // IO[3]: D3
+			             io2_drive,             // IO[2]: 2P mux SEL / 1P TL
+			             snac_pdrO_active[0],   // IO[1]: D0
+			             snac_pdrO_active[1]};  // IO[0]: D1
 			if (~snac_split) USERJOYSTICK_P1 <= user_in_remap;
 			else             USERJOYSTICK_P2 <= user_in_remap;
 		end else begin
