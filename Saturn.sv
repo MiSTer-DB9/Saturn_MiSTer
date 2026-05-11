@@ -392,8 +392,8 @@ joydb joydb (
 `ifndef STV_BUILD
 		"P2O[76],Swap Joysticks,No,Yes;",
 		"P2O[27],Saturn SNAC,OFF,ON;",
+		"P2O[123],Saturn SNAC Adapter, 2P,1P;",
 		"P2O[125],SNAC Players, 1 Player,2 Players;",
-		"P2O[123],SNAC Adapter, 1P passive,2P with mux;",
 		"P2-;",
 		"D5P2O[17:15],Pad 1,Digital,Virt LGun,Wheel,Mission Stick,3D Pad,Dual Mission,Mouse,Off;",
 		"P2-;",
@@ -768,7 +768,7 @@ joydb joydb (
 	// 1P passive vs 74HC157D mux SEL on 2P with mux). Pad type (Saturn Pad /
 	// 3D Pad / Stunner) IS auto-detected by SMPC's PS_ID1_*/PS_ID5_*/PS_NOTHING_STUNNER.
 	wire snac             = status[27];
-	wire snac_mux_adapter = snac & status[123];   // 0 = 1P passive, 1 = 2P with 74HC157D mux
+	wire snac_mux_adapter = snac & ~status[123];  // 0 (default) = 2P with 74HC157D mux, 1 = 1P passive
 	wire snac_2p          = snac & status[125];   // 0 = scan P1,    1 = SMPC alternates P1/P2
 	// [MiSTer-DB9 END]
 
