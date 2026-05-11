@@ -769,7 +769,7 @@ joydb joydb (
 	// 3D Pad / Stunner) IS auto-detected by SMPC's PS_ID1_*/PS_ID5_*/PS_NOTHING_STUNNER.
 	wire snac             = status[27];
 	wire snac_mux_adapter = snac & ~status[123];  // 0 (default) = 2P with 74HC157D mux, 1 = 1P passive
-	wire snac_2p          = snac & status[125];   // 0 = scan P1,    1 = SMPC alternates P1/P2
+	wire snac_2p          = snac & status[125] & ~status[123];  // 0 = scan P1, 1 = SMPC alternates P1/P2 (forced 0 on 1P passive — no P2 jack to alternate to)
 	// [MiSTer-DB9 END]
 
 	// [MiSTer-DB9 BEGIN] - 2P split-select tracker (74HC157D mux SEL on USER_IO[2])
