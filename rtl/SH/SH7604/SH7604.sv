@@ -85,6 +85,7 @@ module SH7604
 	bit        CBUS_WR;
 	bit  [3:0] CBUS_BA;
 	bit        CBUS_REQ;
+	bit        CBUS_ID;
 	bit        CBUS_TAS;
 	
 	bit [31:0] IBUS_A;
@@ -139,6 +140,7 @@ module SH7604
 	bit  [3:0] VBUS_A;
 	bit  [7:0] VBUS_DO;
 	bit        VBUS_REQ;
+	bit        INTC_NMI_REQ;
 	
 	//MULT
 	bit  [1:0] MAC_SEL;
@@ -169,6 +171,7 @@ module SH7604
 	bit        WDT_ACT;
 	bit        WDT_BUSY;
 	bit        ITI_IRQ;
+	bit        WDT_OVF;
 	bit        WDT_PRES;
 	bit        WDT_MRES;
 
@@ -188,8 +191,6 @@ module SH7604
 	bit [31:0] MSBY_DO;
 	bit        MSBY_ACT;
 	bit        MSBY_SBY;
-	
-	bit        SBY;
 	
 	//Internal clocks
 	bit        CLK2_CE;
@@ -234,6 +235,7 @@ module SH7604
 		.BUS_WR(CBUS_WR),
 		.BUS_BA(CBUS_BA),
 		.BUS_REQ(CBUS_REQ),
+		.BUS_ID(CBUS_ID),
 		.BUS_TAS(CBUS_TAS),
 		.BUS_WAIT(CACHE_BUSY | (MULT_BUSY & ~FAST)),
 		
@@ -244,7 +246,7 @@ module SH7604
 		
 		.INT_LVL(INT_LVL),
 		.INT_VEC(INT_VEC),
-		.INT_REQ(INT_REQ),
+		.INT_REQ(INT_REQ & ~MSBY_SBY),
 		.INT_MASK(INT_MASK),
 		.INT_ACK(INT_ACK),
 		.INT_ACP(INT_ACP),
@@ -306,6 +308,7 @@ module SH7604
 		.CBUS_WR(CBUS_WR),
 		.CBUS_BA(CBUS_BA),
 		.CBUS_REQ(CBUS_REQ),
+		.CBUS_ID(CBUS_ID),
 		.CBUS_TAS(CBUS_TAS),
 		.CBUS_BUSY(CACHE_BUSY),
 		
@@ -585,6 +588,8 @@ module SH7604
 		.VECT_REQ(VECT_REQ),
 		.VECT_WAIT(VECT_WAIT),
 		
+		.NMI_REQ(INTC_NMI_REQ),
+		
 		.UBC_IRQ(UBC_IRQ),
 		.DIVU_IRQ(DIVU_IRQ),
 		.DIVU_VEC(DIVU_VEC),
@@ -684,7 +689,7 @@ module SH7604
 		.EN(EN),
 		
 		.RES_N(RES_SYNC_N),
-		.SBY(SBY),
+		.SBY(MSBY_SBY),
 		
 		.FTOA(FTOA),
 		.FTOB(FTOB),
@@ -720,7 +725,8 @@ module SH7604
 		.EN(EN),
 		
 		.RES_N(RES_SYNC_N),
-		.SBY(SBY),
+		.SBY(MSBY_SBY),
+		.NMI(INTC_NMI_REQ),
 		
 		.WDTOVF_N(WDTOVF_N),
 		
@@ -743,6 +749,7 @@ module SH7604
 		.IBUS_ACT(WDT_ACT),
 		
 		.ITI_IRQ(ITI_IRQ),
+		.OVF(WDT_OVF),
 		.PRES(WDT_PRES),
 		.MRES(WDT_MRES)
 	);
@@ -766,9 +773,9 @@ module SH7604
 		.IBUS_BUSY(),
 		.IBUS_ACT(MSBY_ACT),
 		
+		.SLEEP(SLEEP),
+		.WDT_OVF(WDT_OVF),
 		.SBY(MSBY_SBY)
 	);
-	
-	assign SBY = MSBY_SBY & SLEEP;
 	
 endmodule

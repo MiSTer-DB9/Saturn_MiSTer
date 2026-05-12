@@ -8,7 +8,9 @@ module SH7604_WDT
 	input             EN,
 	
 	input             RES_N,
+	
 	input             SBY,
+	input             NMI,
 	
 	output reg        WDTOVF_N,
 	
@@ -31,6 +33,7 @@ module SH7604_WDT
 	output            IBUS_ACT,
 	
 	output            ITI_IRQ,
+	output            OVF,
 	output            PRES,
 	output            MRES
 );
@@ -72,7 +75,7 @@ module SH7604_WDT
 				if (WT_CE) begin
 					if (WTCNT == 8'hFF && WTCSR.WTIT) begin
 						WDTOVF_N <= 0;
-						WRES <= RSTCSR.RSTE & ~RSTCSR.RSTS;
+						WRES <= RSTCSR.RSTE;
 					end
 				end
 				
@@ -85,6 +88,30 @@ module SH7604_WDT
 	assign PRES = WRES & ~RSTCSR.RSTS;
 	assign MRES = WRES &  RSTCSR.RSTS;
 	
+	bit          SBY_TME;
+	always @(posedge CLK or negedge RST_N) begin
+		bit          NMI_OLD;
+		
+		if (!RST_N) begin
+			SBY_TME <= 0;
+			// synopsys translate_off
+			NMI_OLD <= 0;
+			// synopsys translate_onn
+		end
+		else begin
+			if (!RES_N) begin
+				SBY_TME <= 0;
+			end else if (EN && CE_R && !DISABLE) begin
+				NMI_OLD <= NMI;
+				if (NMI && !NMI_OLD && SBY) begin
+					SBY_TME <= 1;
+				end
+				if (OVF) begin
+					SBY_TME <= 0;
+				end
+			end
+		end
+	end	
 	
 	//Registers
 	wire REG_SEL = (IBUS_A >= 32'hFFFFFE80 && IBUS_A <= 32'hFFFFFE8F);
@@ -100,6 +127,7 @@ module SH7604_WDT
 			WTCSR  <= WTCSR_INIT;
 			RSTCSR <= RSTCSR_INIT;
 			// synopsys translate_on
+			OVF <= 0;
 			TM_EN <= 0;
 			OVF_SET <= 0;
 		end
@@ -108,24 +136,29 @@ module SH7604_WDT
 				WTCNT  <= WTCNT_INIT;
 				WTCSR  <= WTCSR_INIT;
 				RSTCSR <= RSTCSR_INIT;
+				OVF <= 0;
 				TM_EN <= 0;
 				OVF_SET <= 0;
-			end else if (SBY) begin
-				WTCNT <= WTCNT_INIT;//?
-				WTCSR[7:3] <= WTCSR_INIT[7:3];
-				RSTCSR <= RSTCSR_INIT;
+//			end else if (SBY) begin
+//				WTCNT <= WTCNT_INIT;//?
+//				WTCSR[7:3] <= WTCSR_INIT[7:3];
+//				RSTCSR <= RSTCSR_INIT;
 			end else if (EN && CE_R && !DISABLE) begin
 				if (CLK2_CE) begin
-					TM_EN <= WTCSR.TME;
+					TM_EN <= WTCSR.TME | SBY_TME;
 				end
 				
+				OVF <= 0;
 				if (!TM_EN) begin
 					WTCNT <= WTCNT_INIT;
 					WTCSR.OVF <= 0;
 				end else if (WT_CE) begin
 					WTCNT <= WTCNT + 8'd1;
 					if (WTCNT == 8'hFF) begin
-						if (!WTCSR.WTIT) begin
+						if (SBY_TME) begin
+							OVF <= 1;
+						end
+						else if (!WTCSR.WTIT) begin
 							WTCSR.OVF <= 1;
 						end
 						else begin
@@ -188,7 +221,7 @@ module SH7604_WDT
 						3'h0: REG_DO <= (WTCSR | 8'h18) & WTCSR_RMASK;
 						3'h1: REG_DO <= WTCNT & WTCNT_RMASK;
 						3'h2: REG_DO <= '1;
-						3'h3: REG_DO <= RSTCSR & RSTCSR_RMASK;
+						3'h3: REG_DO <= (RSTCSR | 8'h1F) & RSTCSR_RMASK;
 						3'h4: REG_DO <= OPEN_BUS;
 						3'h5: REG_DO <= '1;
 						3'h6: REG_DO <= '1;
