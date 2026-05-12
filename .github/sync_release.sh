@@ -8,10 +8,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/retry.sh"
 
 UPSTREAM_REPO="https://github.com/MiSTer-devel/Saturn_MiSTer"
-CORE_NAME=(Saturn)
+CORE_NAME=(Saturn Saturn_DualSDRAM)
 MAIN_BRANCH="main"
-COMPILATION_INPUT=(Saturn.qsf)
-COMPILATION_OUTPUT=(output_files/Saturn.rbf)
+COMPILATION_INPUT=(Saturn.qsf Saturn_DS.qsf)
+COMPILATION_OUTPUT=(output_files/Saturn.rbf output_files/Saturn_DS.rbf)
 QUARTUS_IMAGE="${QUARTUS_IMAGE:?QUARTUS_IMAGE env not set — populated by workflow Resolve-Quartus-image step}"
 # [MiSTer-DB9 BEGIN] - 1 → exit after merge+push so release_v2.yml builds.
 RELEASE_V2_MODE="1"

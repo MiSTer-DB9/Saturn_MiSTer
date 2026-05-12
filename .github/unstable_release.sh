@@ -33,10 +33,10 @@ source "${SCRIPT_DIR}/rerere_train.sh"
 source "${SCRIPT_DIR}/compute_source_hash.sh"
 
 UPSTREAM_REPO="https://github.com/MiSTer-devel/Saturn_MiSTer"
-CORE_NAME=(Saturn)
+CORE_NAME=(Saturn Saturn_DualSDRAM)
 MAIN_BRANCH="main"
-COMPILATION_INPUT=(Saturn.qsf)
-COMPILATION_OUTPUT=(output_files/Saturn.rbf)
+COMPILATION_INPUT=(Saturn.qsf Saturn_DS.qsf)
+COMPILATION_OUTPUT=(output_files/Saturn.rbf output_files/Saturn_DS.rbf)
 QUARTUS_IMAGE="${QUARTUS_IMAGE:?QUARTUS_IMAGE env not set — populated by workflow Resolve-Quartus-image step}"
 GITHUB_TOKEN="${GITHUB_TOKEN:?GITHUB_TOKEN env not set — required for gh release upload}"
 

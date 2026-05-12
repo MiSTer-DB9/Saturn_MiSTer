@@ -36,7 +36,7 @@ jobs:
     - name: Resolve Quartus image
       id: image
       run: |
-        first_input=$(echo 'Saturn.qsf' | awk '{print $1}')
+        first_input=$(echo 'Saturn.qsf Saturn_DS.qsf' | awk '{print $1}')
         image=$(./.github/detect_quartus_image.sh "${first_input}")
         echo "image=${image}" >> "$GITHUB_OUTPUT"
         echo "Resolved Quartus image: ${image}"
