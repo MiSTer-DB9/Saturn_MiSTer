@@ -8,11 +8,14 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/retry.sh"
 
 UPSTREAM_REPO="https://github.com/MiSTer-devel/Saturn_MiSTer"
-CORE_NAME=(Saturn)
+CORE_NAME=(Saturn Saturn_DualSDRAM)
 MAIN_BRANCH="main"
-COMPILATION_INPUT=(Saturn.qsf)
-COMPILATION_OUTPUT=(output_files/Saturn.rbf)
+COMPILATION_INPUT=(Saturn.qsf Saturn_DS.qsf)
+COMPILATION_OUTPUT=(output_files/Saturn.rbf output_files/Saturn_DS.rbf)
 QUARTUS_IMAGE="${QUARTUS_IMAGE:?QUARTUS_IMAGE env not set — populated by workflow Resolve-Quartus-image step}"
+# [MiSTer-DB9 BEGIN] - 1 → exit after merge+push so release_v2.yml builds.
+RELEASE_V2_MODE="1"
+# [MiSTer-DB9 END]
 
 # [MiSTer-DB9 BEGIN] - fork-only cores have no upstream; sync_release is a no-op
 if [[ -z "${UPSTREAM_REPO}" ]]; then
@@ -109,22 +112,26 @@ git merge -Xignore-all-space --no-commit "${COMMIT_TO_MERGE}" || ./.github/notif
 
 git submodule update --init --recursive
 
+# [MiSTer-DB9 BEGIN] - v2 channel: skip inline Quartus; release_v2.yml builds.
+# NEED_REBUILD only picks the commit subject — release_v2.sh's source-hash
+# decides the real rebuild.
+if [[ "${RELEASE_V2_MODE}" == "1" ]]; then
+    if [[ "${NEED_REBUILD}" == "true" ]]; then
+        git commit -m "BOT: Merging upstream, release_v2 will publish ${CORE_NAME[*]}."
+    else
+        git commit -m "BOT: Merging upstream, no core released."
+    fi
+    retry -- git push origin "${MAIN_BRANCH}"
+    exit 0
+fi
+# [MiSTer-DB9 END]
+
 # [MiSTer-DB9-Pro BEGIN] - materialize MASTER_ROOT secret before build
 # (writes sys/db9_key_secret.vh for FPGA cores, db9_key_secret.h for Main_MiSTer)
 ./.github/materialize_secret.sh
 # [MiSTer-DB9-Pro END]
 
 if [[ "${NEED_REBUILD}" == "true" ]] ; then
-    if ! docker image inspect "${QUARTUS_IMAGE}" >/dev/null 2>&1; then
-        echo "Loading or pulling Docker image ${QUARTUS_IMAGE}..."
-        if [ -f /tmp/docker-image.tar ]; then
-            docker load -i /tmp/docker-image.tar
-        else
-            retry -- docker pull "${QUARTUS_IMAGE}"
-            docker save "${QUARTUS_IMAGE}" -o /tmp/docker-image.tar
-        fi
-    fi
-
     RELEASE_FILES_LIST=()
     for i in "${!CORE_NAME[@]}"; do
         if [[ -n "${UPSTREAM_CORE_FILES[i]}" ]]; then

@@ -29,12 +29,14 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/retry.sh"
 # shellcheck source=rerere_train.sh
 source "${SCRIPT_DIR}/rerere_train.sh"
+# shellcheck source=compute_source_hash.sh
+source "${SCRIPT_DIR}/compute_source_hash.sh"
 
 UPSTREAM_REPO="https://github.com/MiSTer-devel/Saturn_MiSTer"
-CORE_NAME=(Saturn)
+CORE_NAME=(Saturn Saturn_DualSDRAM)
 MAIN_BRANCH="main"
-COMPILATION_INPUT=(Saturn.qsf)
-COMPILATION_OUTPUT=(output_files/Saturn.rbf)
+COMPILATION_INPUT=(Saturn.qsf Saturn_DS.qsf)
+COMPILATION_OUTPUT=(output_files/Saturn.rbf output_files/Saturn_DS.rbf)
 QUARTUS_IMAGE="${QUARTUS_IMAGE:?QUARTUS_IMAGE env not set — populated by workflow Resolve-Quartus-image step}"
 GITHUB_TOKEN="${GITHUB_TOKEN:?GITHUB_TOKEN env not set — required for gh release upload}"
 
@@ -44,11 +46,7 @@ UNSTABLE_TAG="unstable-builds"
 # variant or the second dispatch clobbers the first's merge state.
 UNSTABLE_BRANCH="unstable/${MAIN_BRANCH}"
 RETENTION=7
-HDL_GLOBS=(
-    '*.v' '*.sv' '*.vhd' '*.vhdl'
-    '*.qsf' '*.qip' '*.qpf' '*.sdc'
-    '*.tcl' '*.mif' '*.hex'
-)
+# HDL_GLOBS + compute_source_hash come from compute_source_hash.sh.
 
 # Emit the merged release body with this variant's stanza updated. Multi-
 # branch forks (GBA: master / GBA2P / accuracy, X68000: master / USERIO2,
@@ -246,26 +244,6 @@ if ! command -v gh >/dev/null 2>&1; then
     exit 1
 fi
 
-# Source-hash filter: only .v / .sv / .vhd / .vhdl / .qsf / .qip / .qpf / .sdc
-# / .tcl / .mif / .hex contribute. Excludes .git, releases (stable RBFs),
-# output_files (Quartus artifacts).
-compute_source_hash() {
-    # NUL-separated find + xargs batched sha256sum (single process per batch,
-    # not per file). Path-sorted so adds/removes/renames change the digest.
-    find . -type f \( \
-            -name '*.v'    -o -name '*.sv'   -o -name '*.vhd'  -o -name '*.vhdl' \
-         -o -name '*.qsf'  -o -name '*.qip'  -o -name '*.qpf'  -o -name '*.sdc' \
-         -o -name '*.tcl'  -o -name '*.mif'  -o -name '*.hex' \
-         \) \
-        -not -path './.git/*' \
-        -not -path './releases/*' \
-        -not -path './output_files/*' \
-        -print0 \
-        | LC_ALL=C sort -z \
-        | xargs -0 sha256sum \
-        | sha256sum | awk '{print $1}'
-}
-
 CURRENT_SOURCE_HASH=$(compute_source_hash)
 echo "Source hash: ${CURRENT_SOURCE_HASH}"
 
@@ -309,17 +287,6 @@ if (( ! RELEASE_EXISTS )); then
         --title "Unstable builds" \
         --notes "Per-core unstable RBFs built off upstream HEAD. Last ${RETENTION} retained per filename pattern."
     RELEASE_EXISTS=1
-fi
-
-# Quartus image cache: load from /tmp if pre-cached, otherwise pull + save.
-if ! docker image inspect "${QUARTUS_IMAGE}" >/dev/null 2>&1; then
-    echo "Loading or pulling Docker image ${QUARTUS_IMAGE}..."
-    if [ -f /tmp/docker-image.tar ]; then
-        docker load -i /tmp/docker-image.tar
-    else
-        retry -- docker pull "${QUARTUS_IMAGE}"
-        docker save "${QUARTUS_IMAGE}" -o /tmp/docker-image.tar
-    fi
 fi
 
 TIMESTAMP=$(date -u +%Y%m%d_%H%M)
