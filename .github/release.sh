@@ -21,19 +21,12 @@ QUARTUS_IMAGE="${QUARTUS_IMAGE:?QUARTUS_IMAGE env not set — populated by workf
 GITHUB_TOKEN="${GITHUB_TOKEN:?GITHUB_TOKEN env not set — required for gh release upload}"
 
 TAG_PREFIX="stable/${MAIN_BRANCH}/"
-RETENTION="${RETENTION:-30}"
+RETENTION="${RETENTION:-0}"
 
-# [MiSTer-DB9 BEGIN] - pristine-upstream tripwire: refuse to build an
-# un-ported fork's first BOT-setup push as a stock-upstream RBF.
-SATURN_HIT=$(find . -maxdepth 4 -path '*/sys/joydb9saturn.v' -type f -print -quit 2>/dev/null)
-if [[ -z "${SATURN_HIT}" ]]; then
-    ANY_SYS=$(find . -maxdepth 4 -type d -name sys -print -quit 2>/dev/null)
-    if [[ -n "${ANY_SYS}" ]]; then
-        echo "Fork is pristine upstream (no */sys/joydb9saturn.v within depth 4). Run apply_db9_framework.sh before enabling builds. Skipping."
-        exit 0
-    fi
-fi
-# [MiSTer-DB9 END]
+# Pristine-upstream tripwire and source-hash skip both run pre-checkout in the
+# workflow's "Pre-flight skip check" step (./.github/preflight_skip.sh). If we
+# reach this script the preflight emitted skip=false, so neither gate fires
+# again here — single source of truth, no duplication.
 
 export GIT_MERGE_AUTOEDIT=no
 git config --global user.email "theypsilon@gmail.com"
@@ -47,43 +40,28 @@ git submodule update --init --recursive
 BUILD_SHA=$(git rev-parse HEAD)
 BUILD_SHA7="${BUILD_SHA:0:7}"
 
-# [MiSTer-DB9-Pro BEGIN] - materialize MASTER_ROOT secret before build
+# materialize MASTER_ROOT secret before build
 ./.github/materialize_secret.sh
-# [MiSTer-DB9-Pro END]
+
+# Upstream case-mismatch shims (Linux-only failures). Each is gated on the
+# specific filename pair so it's a no-op for every other fork. Track via
+# https://github.com/MiSTer-devel/<fork>/issues so this list can shrink.
+#   - Arcade-TaitoSystemSJ_MiSTer: rtl/index.qip references "Mc68705p3.v" but
+#     the file is committed as rtl/mc68705p3.v.
+if [[ -f rtl/mc68705p3.v && ! -e rtl/Mc68705p3.v ]]; then
+    ln -s mc68705p3.v rtl/Mc68705p3.v
+fi
 
 if ! command -v gh >/dev/null 2>&1; then
     echo "::error::gh CLI missing — cannot publish stable release"
     exit 1
 fi
-if ! command -v jq >/dev/null 2>&1; then
-    echo "::error::jq missing — required for release-body parsing"
-    exit 1
-fi
 
+# Hash again so the release body's `source_hash:` line below records the exact
+# tree state at build time. Excludes db9_key_secret.{h,vh} so this matches the
+# preflight value despite materialize_secret.sh having run in between.
 CURRENT_SOURCE_HASH=$(compute_source_hash)
 echo "Source hash: ${CURRENT_SOURCE_HASH}"
-
-# Skip lookup: list this variant's releases (limit 100 so a quiet variant's
-# newest survives sibling activity in a multi-variant repo), take the newest
-# by createdAt, parse `source_hash:` from its body.
-PREV_JSON=$(gh release list --repo "${GITHUB_REPOSITORY}" --limit 100 \
-    --json tagName,createdAt,body \
-    --jq "[.[] | select(.tagName | startswith(\"${TAG_PREFIX}\"))] | sort_by(.createdAt) | reverse | .[0] // null" \
-    2>/dev/null || echo null)
-PREV_TAG=""
-PREV_HASH=""
-if [[ -n "${PREV_JSON}" && "${PREV_JSON}" != "null" ]]; then
-    PREV_TAG=$(jq -r '.tagName // ""' <<<"${PREV_JSON}")
-    PREV_HASH=$(jq -r '.body // ""' <<<"${PREV_JSON}" \
-        | grep -oP '(?<=^source_hash:[[:space:]])\S+' | head -1 || true)
-fi
-echo "Previous tag: ${PREV_TAG:-<none>}"
-echo "Previous source hash: ${PREV_HASH:-<none>}"
-
-if [[ "${FORCED:-false}" != "true" && -n "${PREV_HASH}" && "${PREV_HASH}" == "${CURRENT_SOURCE_HASH}" ]]; then
-    echo "Source hash unchanged — skipping Quartus build. Previous release ${PREV_TAG} stays latest for ${MAIN_BRANCH}."
-    exit 0
-fi
 
 TIMESTAMP=$(date -u +%Y%m%d_%H%M)
 DATE_STAMP=$(date -u +%Y%m%d)
@@ -92,12 +70,15 @@ UPLOAD_FILES=()
 
 for i in "${!CORE_NAME[@]}"; do
     FILE_EXT="${COMPILATION_OUTPUT[i]##*.}"
-    # <Core>_YYYYMMDD_<sha7>.<ext> — Distribution's widened regex matches both
-    # this and the pre-rework legacy <Core>_YYYYMMDD form so rollover cleans up.
+    # <Core>_YYYYMMDD_<sha7>_DB9.<ext> — the trailing _DB9 marks every fork-built
+    # asset for end-user provenance (visible on GitHub Releases and on the SD
+    # card). Distribution's widened regex matches the marked form, the prior
+    # `_<sha7>` (pre-marker) form, and the pre-rework legacy `_YYYYMMDD` form so
+    # rollover cleans up.
     if [[ "${FILE_EXT}" == "${COMPILATION_OUTPUT[i]}" ]]; then
-        RBF_NAME="${CORE_NAME[i]}_${DATE_STAMP}_${BUILD_SHA7}"
+        RBF_NAME="${CORE_NAME[i]}_${DATE_STAMP}_${BUILD_SHA7}_DB9"
     else
-        RBF_NAME="${CORE_NAME[i]}_${DATE_STAMP}_${BUILD_SHA7}.${FILE_EXT}"
+        RBF_NAME="${CORE_NAME[i]}_${DATE_STAMP}_${BUILD_SHA7}_DB9.${FILE_EXT}"
     fi
     echo
     echo "Building '${RBF_NAME}'..."
@@ -126,7 +107,7 @@ release_body() {
         retention_label="last ${RETENTION}"
     fi
     cat <<EOF
-Stable RBF build for \`${MAIN_BRANCH}\`. Retention: ${retention_label} per branch (older releases auto-pruned).
+Stable RBF build for \`${MAIN_BRANCH}\`. Retention: ${retention_label} per branch.
 
 branch:        ${MAIN_BRANCH}
 build_sha:     ${BUILD_SHA}
@@ -162,6 +143,7 @@ if (( RETENTION > 0 )); then
     echo "Pruning to last ${RETENTION} releases on ${TAG_PREFIX}..."
     mapfile -t TO_DELETE < <(
         gh release list --repo "${GITHUB_REPOSITORY}" --limit 100 \
+            --exclude-drafts \
             --json tagName,createdAt \
             --jq "[.[] | select(.tagName | startswith(\"${TAG_PREFIX}\"))] | sort_by(.createdAt) | reverse | .[${RETENTION}:] | .[].tagName"
     )
