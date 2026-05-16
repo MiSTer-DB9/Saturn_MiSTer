@@ -72,5 +72,5 @@ set_global_assignment -name ALM_REGISTER_PACKING_EFFORT HIGH
 set_global_assignment -name OPTIMIZATION_TECHNIQUE BALANCED
 # set_global_assignment -name PHYSICAL_SYNTHESIS_REGISTER_RETIMING OFF
 # set_global_assignment -name PHYSICAL_SYNTHESIS_ASYNCHRONOUS_SIGNAL_PIPELINING OFF
-set_global_assignment -name SEED 2
+set_global_assignment -name SEED 3
 # [MiSTer-DB9 END]

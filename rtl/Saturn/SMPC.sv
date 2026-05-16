@@ -38,7 +38,17 @@ module SMPC (
 	output reg [ 6: 0] DDR1,
 	input      [ 6: 0] PDR2I,
 	output reg [ 6: 0] PDR2O,
-	output reg [ 6: 0] DDR2
+	output reg [ 6: 0] DDR2,
+
+	// [MiSTer-DB9-Pro BEGIN] - export SMPC-decoded P1 digital pad for OSD path
+	// (UserIO=Saturn routes through SMPC; joydb9saturn is pruned to save ALMs,
+	// so the OSD navigation path reuses this already-decoded report instead of
+	// re-sniffing USER_IO pins). Same JOY_DATA bit layout SMPC writes to OREG.
+	// P1 only: OSD navigation is single-cursor; matches the prior watcher's
+	// single-stream behaviour and keeps the area footprint minimal.
+	output reg [15: 0] DB9_JOY1,
+	output reg         DB9_JOY1_VLD
+	// [MiSTer-DB9-Pro END]
 );
 
 	//Registers
@@ -262,7 +272,10 @@ module SMPC (
 			DDR <= '{2{'0}};
 			IOSEL <= '0;
 			EXLE <= '0;
-			
+			// [MiSTer-DB9-Pro BEGIN] - OSD pad export reset (no ghost before scan)
+			DB9_JOY1 <= '0; DB9_JOY1_VLD <= 0;
+			// [MiSTer-DB9-Pro END]
+
 			MSHRES_N <= 0;
 			MSHNMI_N <= 0;
 			SSHRES_N <= 0;
@@ -1031,6 +1044,15 @@ module SMPC (
 					end
 					
 					PS_TYPE_SEL: begin
+						// [MiSTer-DB9-Pro BEGIN] - P1 pad-present for OSD path
+						// Digital pad (4'hB) latches data+valid in PS_DPAD_3.
+						// 3D Pad (4'h5) flags present only (no digital extract,
+						// matches prior behaviour). Everything else: not present.
+						if (!PORT_NUM) begin
+							if (MD_ID == 4'h5)      DB9_JOY1_VLD <= 1'b1;
+							else if (MD_ID != 4'hB) DB9_JOY1_VLD <= 1'b0;
+						end
+						// [MiSTer-DB9-Pro END]
 						if (MD_ID == 4'hB)
 							PORT_ST <= PS_DPAD_0;
 //						else if (MD_ID == 4'hD)
@@ -1074,6 +1096,14 @@ module SMPC (
 					
 					PS_DPAD_3: begin
 						JOY_DATA[7:4] <= PDR_I[PORT_NUM][3:0];
+						// [MiSTer-DB9-Pro BEGIN] - latch decoded P1 digital pad for OSD
+						// Full standard report assembled here: [15:12] from PS_ID1_3,
+						// [11:8] from PS_DPAD_1, [7:4] = the nibble captured this cycle.
+						if (!PORT_NUM) begin
+							DB9_JOY1     <= {JOY_DATA[15:8], PDR_I[PORT_NUM][3:0], JOY_DATA[3:0]};
+							DB9_JOY1_VLD <= 1'b1;
+						end
+						// [MiSTer-DB9-Pro END]
 						PORT_ST <= PS_DPAD_4;
 					end
 					

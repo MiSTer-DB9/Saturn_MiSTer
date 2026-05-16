@@ -89,7 +89,11 @@ module Saturn
 	input      [ 6: 0] SMPC_PDR2I,
 	output     [ 6: 0] SMPC_PDR2O,
 	output     [ 6: 0] SMPC_DDR2,
-	
+	// [MiSTer-DB9-Pro BEGIN] - SMPC-decoded P1 pad export for OSD path
+	output     [15: 0] SMPC_DB9_JOY1,
+	output             SMPC_DB9_JOY1_VLD,
+	// [MiSTer-DB9-Pro END]
+
 `ifndef STV_BUILD
 	input              CD_CE,
 	input              CD_CDATA,
@@ -737,7 +741,11 @@ module Saturn
 		.DDR1(SMPC_DDR1),
 		.PDR2I(SMPC_PDR2I),
 		.PDR2O(SMPC_PDR2O),
-		.DDR2(SMPC_DDR2)
+		.DDR2(SMPC_DDR2),
+		// [MiSTer-DB9-Pro BEGIN] - SMPC-decoded P1 pad export for OSD path
+		.DB9_JOY1(SMPC_DB9_JOY1),
+		.DB9_JOY1_VLD(SMPC_DB9_JOY1_VLD)
+		// [MiSTer-DB9-Pro END]
 	);
 	
 	VDP1 VDP1

@@ -242,67 +242,37 @@ joydb joydb (
 
 // [MiSTer-DB9 END]
 
-// [MiSTer-DB9-Pro BEGIN] - SMPC-driven passive Saturn-pad watcher for OSD
+// [MiSTer-DB9-Pro BEGIN] - SMPC-decoded Saturn pad -> OSD path
 // When UserIO=Saturn routes through SMPC (saturn_via_smpc=1) joydb9saturn is
-// pruned, so joy_raw_payload + USER_OSD_JOYDB are zero. This watcher mirrors
-// joydb9saturn's bit layout (sys/joydb9saturn.v:27-43, :120-186) by listening
-// passively on SMPC's already-driven {S0,S1} phase strobe (snac_pdrO_active
-// [6]/[5]) and Saturn data lines USER_IN[3]/[5]/[0]/[1] = {D3,D2,D1,D0}. Cost
-// = a 14-bit scan buffer + 14-bit latched dat + tiny md_id check; no S0/S1
-// drive logic, no 2P scheduling. Output drives joy_raw / USER_OSD only when
-// saturn_via_smpc=1 so genuine SNAC mode keeps the documented
+// pruned to save ALMs, so joy_raw_payload + USER_OSD_JOYDB are zero. SMPC
+// already decodes the connected digital pad into the standard 2-byte Saturn
+// report (the data that makes game input work). We export P1 from SMPC
+// (SMPC_DB9_JOY1 + _VLD) and remap it into joydb9saturn's joy_raw
+// 14-bit layout (sys/joydb.sv:104 `----L-S ZYXCBAUDLR`). No pin sniffing, no
+// phase/md_id machinery: the OSD pad now tracks exactly what the game sees,
+// and stays robust across upstream SMPC rewrites. SMPC_DB9_JOY* bit layout
+// (active-low, == Saturn.sv `joy1`): [15]R[14]L[13]Dn[12]Up [11]St[10]A[9]C
+// [8]B [7]Rt[6]X[5]Y[4]Z[3]L. Output reaches joy_raw / USER_OSD only when
+// saturn_via_smpc=1 (mux below) so genuine SNAC mode keeps the documented
 // `joy_raw = 0 / OSD via USB only` contract (the fork hazard notes).
-wire [3:0]  smpc_sat_in    = {USER_IN[3], USER_IN[5], USER_IN[0], USER_IN[1]}; // {D3,D2,D1,D0}
-wire [1:0]  smpc_sat_phase = {snac_pdrO_active[6], snac_pdrO_active[5]};       // {S0,S1}
-reg  [13:0] smpc_sat_scan  = 14'h3FFF;
-reg  [13:0] smpc_sat_dat   = 14'h3FFF;
-reg         smpc_sat_valid = 1'b0;
-reg  [1:0]  smpc_sat_phase_q = 2'b00;
-wire [3:0]  smpc_sat_md_id = {smpc_sat_in[3]   | smpc_sat_in[2],
-                              smpc_sat_in[1]   | smpc_sat_in[0],
-                              smpc_sat_scan[0] | smpc_sat_scan[1],
-                              smpc_sat_scan[2] | smpc_sat_scan[3]};
-
-always @(posedge CLK_JOY) begin
-  smpc_sat_phase_q <= smpc_sat_phase;
-  case (smpc_sat_phase)
-    2'b00: begin                                   // {S0=0,S1=0}: R/X/Y/Z bank
-      smpc_sat_scan[13] <= smpc_sat_in[3];         // D3 -> R
-      smpc_sat_scan[7]  <= smpc_sat_in[2];         // D2 -> X
-      smpc_sat_scan[8]  <= smpc_sat_in[1];         // D1 -> Y
-      smpc_sat_scan[9]  <= smpc_sat_in[0];         // D0 -> Z
-    end
-    2'b10: begin                                   // {S0=1,S1=0}: Start/A/C/B
-      smpc_sat_scan[10] <= smpc_sat_in[3];         // D3 -> Start
-      smpc_sat_scan[4]  <= smpc_sat_in[2];         // D2 -> A
-      smpc_sat_scan[6]  <= smpc_sat_in[1];         // D1 -> C
-      smpc_sat_scan[5]  <= smpc_sat_in[0];         // D0 -> B
-    end
-    2'b01: begin                                   // {S0=0,S1=1}: d-pad
-      smpc_sat_scan[0]  <= smpc_sat_in[3];         // D3 -> Right
-      smpc_sat_scan[1]  <= smpc_sat_in[2];         // D2 -> Left
-      smpc_sat_scan[2]  <= smpc_sat_in[1];         // D1 -> Down
-      smpc_sat_scan[3]  <= smpc_sat_in[0];         // D0 -> Up
-    end
-    2'b11: begin                                   // {S0=1,S1=1}: md_id + L
-      // Commit at 01 -> 11 transition (full 4-phase scan complete). joy_in
-      // live at phase 11 supplies L (bit [12]) and the high nibble of md_id.
-      if (smpc_sat_phase_q == 2'b01) begin
-        if (smpc_sat_md_id == 4'hB) begin          // digital 6-button pad
-          smpc_sat_dat   <= {1'b1, smpc_sat_in[3], smpc_sat_scan[13], smpc_sat_scan[10:0]};
-          smpc_sat_valid <= 1'b1;
-        end
-        else if (smpc_sat_md_id == 4'h5) begin     // 3D Pad analog (flag only)
-          smpc_sat_valid <= 1'b1;
-        end
-        else begin
-          smpc_sat_dat   <= 14'h3FFF;
-          smpc_sat_valid <= 1'b0;
-        end
-      end
-    end
-  endcase
-end
+// P1 only: OSD navigation is single-cursor (matches prior watcher behaviour).
+wire [15:0] smpc_sat_rep   = SMPC_DB9_JOY1_VLD ? SMPC_DB9_JOY1 : 16'hFFFF;
+wire        smpc_sat_valid = SMPC_DB9_JOY1_VLD;
+// Active-low [13:0] in joydb9saturn joy_raw bit order.
+wire [13:0] smpc_sat_dat   = {1'b1,              // [13] unused (always 1)
+                              smpc_sat_rep[3],   // [12] L
+                              smpc_sat_rep[7],   // [11] R
+                              smpc_sat_rep[11],  // [10] Start
+                              smpc_sat_rep[4],   // [ 9] Z
+                              smpc_sat_rep[5],   // [ 8] Y
+                              smpc_sat_rep[6],   // [ 7] X
+                              smpc_sat_rep[9],   // [ 6] C
+                              smpc_sat_rep[8],   // [ 5] B
+                              smpc_sat_rep[10],  // [ 4] A
+                              smpc_sat_rep[12],  // [ 3] Up
+                              smpc_sat_rep[13],  // [ 2] Down
+                              smpc_sat_rep[14],  // [ 1] Left
+                              smpc_sat_rep[15]}; // [ 0] Right
 
 wire [15:0] smpc_osd_pad   = smpc_sat_valid ? {2'b00, ~smpc_sat_dat} : 16'h0000;
 wire        smpc_user_osd  = smpc_osd_pad[10] & smpc_osd_pad[6];   // Start & C
@@ -977,7 +947,11 @@ assign      USER_OSD        = saturn_via_smpc ? smpc_user_osd    : USER_OSD_JOYD
 	wire [ 6: 0] SMPC_PDR2I;
 	wire [ 6: 0] SMPC_PDR2O;
 	wire [ 6: 0] SMPC_DDR2;
-	
+	// [MiSTer-DB9-Pro BEGIN] - SMPC-decoded P1 pad export for OSD path
+	wire [15: 0] SMPC_DB9_JOY1;
+	wire         SMPC_DB9_JOY1_VLD;
+	// [MiSTer-DB9-Pro END]
+
 	wire         CD_CDATA;
 	wire         CD_HDATA;
 	wire         CD_COMCLK;
@@ -1172,7 +1146,11 @@ assign      USER_OSD        = saturn_via_smpc ? smpc_user_osd    : USER_OSD_JOYD
 `endif
 		.SMPC_PDR2O(SMPC_PDR2O),
 		.SMPC_DDR2(SMPC_DDR2),
-		
+		// [MiSTer-DB9-Pro BEGIN] - SMPC-decoded P1 pad export for OSD path
+		.SMPC_DB9_JOY1(SMPC_DB9_JOY1),
+		.SMPC_DB9_JOY1_VLD(SMPC_DB9_JOY1_VLD),
+		// [MiSTer-DB9-Pro END]
+
 `ifndef STV_BUILD
 		.CD_CE(CD_CE),
 		.CD_CDATA(CD_CDATA),
