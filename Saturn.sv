@@ -185,7 +185,7 @@ module emu
 // Only IO[2] differs: in 2P-with-mux mode it must be push-pull to drive the
 // 74HC157D mux SEL; in 1P passive it stays open-drain (TL line).
 assign USER_PP = snac_mux_adapter ? 8'b00000100
-               : snac_smpc        ? 8'b00000000
+               : snac             ? 8'b00000000
                :                    USER_PP_DRIVE;
 // [MiSTer-DB9 END]
 	assign ADC_BUS  = 'Z;
@@ -196,13 +196,7 @@ wire   [1:0] joy_type_raw    = status[127:126]; // 0=Off, 1=Saturn, 2=DB9MD, 3=D
 wire         joy_2p          = status[125];
 // SNAC cores: replace 1'b0 with the core's SNAC enable expression so SNAC
 // preempts the joydb wrapper on shared USER_IO pins. Default 1'b0 is no-op.
-// [MiSTer-DB9-Pro BEGIN] - route UserIO=Saturn through SMPC (reuse SNAC path),
-// lets Quartus prune joydb9saturn (constant-input → dead-logic elimination)
-// and gives UserIO=Saturn users 3D Pad analog support via SMPC's PS_ID5/ANALOG.
-wire         saturn_via_smpc = (joy_type_raw == 2'd1) & saturn_unlocked & ~snac;
-wire         snac_smpc       = snac | saturn_via_smpc;
-wire         snac_active     = snac_smpc;
-// [MiSTer-DB9-Pro END]
+wire         snac_active     = snac;
 wire   [1:0] joy_type        = snac_active ? 2'd0 : joy_type_raw;
 wire         joy_db9md_en    = (joy_type == 2'd2);
 wire         joy_db15_en     = (joy_type == 2'd3);
@@ -222,7 +216,6 @@ wire   [7:0] USER_PP_DRIVE;
 wire  [15:0] joydb_1, joydb_2;
 wire         joydb_1ena, joydb_2ena;
 wire  [15:0] joy_raw_payload;
-wire         USER_OSD_JOYDB;
 
 joydb joydb (
   .clk             ( CLK_JOY         ),
@@ -232,7 +225,7 @@ joydb joydb (
   .saturn_unlocked ( saturn_unlocked ),
   .USER_OUT_DRIVE  ( USER_OUT_DRIVE  ),
   .USER_PP_DRIVE   ( USER_PP_DRIVE   ),
-  .USER_OSD        ( USER_OSD_JOYDB  ),
+  .USER_OSD        ( USER_OSD        ),
   .joydb_1         ( joydb_1         ),
   .joydb_2         ( joydb_2         ),
   .joydb_1ena      ( joydb_1ena      ),
@@ -241,44 +234,6 @@ joydb joydb (
 );
 
 // [MiSTer-DB9 END]
-
-// [MiSTer-DB9-Pro BEGIN] - SMPC-decoded Saturn pad -> OSD path
-// When UserIO=Saturn routes through SMPC (saturn_via_smpc=1) joydb9saturn is
-// pruned to save ALMs, so joy_raw_payload + USER_OSD_JOYDB are zero. SMPC
-// already decodes the connected digital pad into the standard 2-byte Saturn
-// report (the data that makes game input work). We export P1 from SMPC
-// (SMPC_DB9_JOY1 + _VLD) and remap it into joydb9saturn's joy_raw
-// 14-bit layout (sys/joydb.sv:104 `----L-S ZYXCBAUDLR`). No pin sniffing, no
-// phase/md_id machinery: the OSD pad now tracks exactly what the game sees,
-// and stays robust across upstream SMPC rewrites. SMPC_DB9_JOY* bit layout
-// (active-low, == Saturn.sv `joy1`): [15]R[14]L[13]Dn[12]Up [11]St[10]A[9]C
-// [8]B [7]Rt[6]X[5]Y[4]Z[3]L. Output reaches joy_raw / USER_OSD only when
-// saturn_via_smpc=1 (mux below) so genuine SNAC mode keeps the documented
-// `joy_raw = 0 / OSD via USB only` contract (the fork hazard notes).
-// P1 only: OSD navigation is single-cursor (matches prior watcher behaviour).
-wire [15:0] smpc_sat_rep   = SMPC_DB9_JOY1_VLD ? SMPC_DB9_JOY1 : 16'hFFFF;
-wire        smpc_sat_valid = SMPC_DB9_JOY1_VLD;
-// Active-low [13:0] in joydb9saturn joy_raw bit order.
-wire [13:0] smpc_sat_dat   = {1'b1,              // [13] unused (always 1)
-                              smpc_sat_rep[3],   // [12] L
-                              smpc_sat_rep[7],   // [11] R
-                              smpc_sat_rep[11],  // [10] Start
-                              smpc_sat_rep[4],   // [ 9] Z
-                              smpc_sat_rep[5],   // [ 8] Y
-                              smpc_sat_rep[6],   // [ 7] X
-                              smpc_sat_rep[9],   // [ 6] C
-                              smpc_sat_rep[8],   // [ 5] B
-                              smpc_sat_rep[10],  // [ 4] A
-                              smpc_sat_rep[12],  // [ 3] Up
-                              smpc_sat_rep[13],  // [ 2] Down
-                              smpc_sat_rep[14],  // [ 1] Left
-                              smpc_sat_rep[15]}; // [ 0] Right
-
-wire [15:0] smpc_osd_pad   = smpc_sat_valid ? {2'b00, ~smpc_sat_dat} : 16'h0000;
-wire        smpc_user_osd  = smpc_osd_pad[10] & smpc_osd_pad[6];   // Start & C
-wire [15:0] joy_raw_for_hps = saturn_via_smpc ? smpc_osd_pad     : joy_raw_payload;
-assign      USER_OSD        = saturn_via_smpc ? smpc_user_osd    : USER_OSD_JOYDB;
-// [MiSTer-DB9-Pro END]
 
 	assign {UART_RTS, UART_TXD, UART_DTR} = 0;
 	assign BUTTONS   = {1'b0,osd_btn};
@@ -551,7 +506,7 @@ assign      USER_OSD        = saturn_via_smpc ? smpc_user_osd    : USER_OSD_JOYD
 		.joystick_3(joystick_3_USB),
 		.joystick_4(joystick_4_USB),
 		// [MiSTer-DB9 BEGIN] - DB9/SNAC8 support: joy_raw
-		.joy_raw(OSD_STATUS ? joy_raw_for_hps : 16'b0),
+		.joy_raw(OSD_STATUS ? joy_raw_payload : 16'b0),
 		// [MiSTer-DB9 END]
 		// [MiSTer-DB9-Pro BEGIN] - Saturn key gate
 		.saturn_unlocked(saturn_unlocked),
@@ -828,8 +783,8 @@ assign      USER_OSD        = saturn_via_smpc ? smpc_user_osd    : USER_OSD_JOYD
 	// 1P passive vs 74HC157D mux SEL on 2P with mux). Pad type (Saturn Pad /
 	// 3D Pad / Stunner) IS auto-detected by SMPC's PS_ID1_*/PS_ID5_*/PS_NOTHING_STUNNER.
 	wire snac             = status[27];
-	wire snac_mux_adapter = snac_smpc & ~status[123];  // 0 (default) = 2P with 74HC157D mux, 1 = 1P passive
-	wire snac_2p          = snac_smpc & status[125] & ~status[123];  // 0 = scan P1, 1 = SMPC alternates P1/P2 (forced 0 on 1P passive — no P2 jack to alternate to)
+	wire snac_mux_adapter = snac & ~status[123];  // 0 (default) = 2P with 74HC157D mux, 1 = 1P passive
+	wire snac_2p          = snac & status[125] & ~status[123];  // 0 = scan P1, 1 = SMPC alternates P1/P2 (forced 0 on 1P passive — no P2 jack to alternate to)
 	// [MiSTer-DB9 END]
 
 	// [MiSTer-DB9 BEGIN] - 2P split-select tracker (74HC157D mux SEL on USER_IO[2])
@@ -862,7 +817,7 @@ assign      USER_OSD        = saturn_via_smpc ? smpc_user_osd    : USER_OSD_JOYD
 	wire [6:0] user_in_remap    = {USER_IN[4], USER_IN[6], snac_tl_in,
 	                                USER_IN[3], USER_IN[5], USER_IN[0], USER_IN[1]};
 	always @(posedge clk_sys) begin
-		if (snac_smpc) begin
+		if (snac) begin
 			USER_OUT <= {snac_pdrO_active[4],   // IO[7]: 2P-mod TL
 			             snac_pdrO_active[5],   // IO[6]: TR
 			             snac_pdrO_active[2],   // IO[5]: D2
@@ -947,11 +902,7 @@ assign      USER_OSD        = saturn_via_smpc ? smpc_user_osd    : USER_OSD_JOYD
 	wire [ 6: 0] SMPC_PDR2I;
 	wire [ 6: 0] SMPC_PDR2O;
 	wire [ 6: 0] SMPC_DDR2;
-	// [MiSTer-DB9-Pro BEGIN] - SMPC-decoded P1 pad export for OSD path
-	wire [15: 0] SMPC_DB9_JOY1;
-	wire         SMPC_DB9_JOY1_VLD;
-	// [MiSTer-DB9-Pro END]
-
+	
 	wire         CD_CDATA;
 	wire         CD_HDATA;
 	wire         CD_COMCLK;
@@ -1133,7 +1084,7 @@ assign      USER_OSD        = saturn_via_smpc ? smpc_user_osd    : USER_OSD_JOYD
 		.SMPC_AREA(area_code),
 		.SMPC_DOTSEL(SMPC_DOTSEL),
 `ifndef STV_BUILD
-		.SMPC_PDR1I(snac_smpc ? USERJOYSTICK_P1 : SMPC_PDR1I),
+		.SMPC_PDR1I(snac ? USERJOYSTICK_P1 : SMPC_PDR1I),
 `else
 		.SMPC_PDR1I(7'h5C),
 `endif
@@ -1146,11 +1097,7 @@ assign      USER_OSD        = saturn_via_smpc ? smpc_user_osd    : USER_OSD_JOYD
 `endif
 		.SMPC_PDR2O(SMPC_PDR2O),
 		.SMPC_DDR2(SMPC_DDR2),
-		// [MiSTer-DB9-Pro BEGIN] - SMPC-decoded P1 pad export for OSD path
-		.SMPC_DB9_JOY1(SMPC_DB9_JOY1),
-		.SMPC_DB9_JOY1_VLD(SMPC_DB9_JOY1_VLD),
-		// [MiSTer-DB9-Pro END]
-
+		
 `ifndef STV_BUILD
 		.CD_CE(CD_CE),
 		.CD_CDATA(CD_CDATA),
@@ -1388,7 +1335,15 @@ assign      USER_OSD        = saturn_via_smpc ? smpc_user_osd    : USER_OSD_JOYD
 	);
 	
 	
-`ifndef DEBUG
+// [MiSTer-DB9 BEGIN] - drop USB-emulated Saturn light gun (~262 ALM, lightgun
+// P1+P2) to fit joydb9saturn within the DE10-Nano LAB budget. This is only the
+// USB/mouse/joystick-as-gun emulation; a physical Sega Saturn Stunner via the
+// DB9/SNAC adapter is a separate SMPC path (USER_IN -> USERJOYSTICK -> SMPC
+// PS_NOTHING_STUNNER) and is unaffected. MISTER_DB9_NEVER is never defined, so
+// this falls through to the existing no-gun stub (the proven DEBUG-build
+// configuration), byte-identical `else` below.
+`ifdef MISTER_DB9_NEVER
+// [MiSTer-DB9 END]
 	wire lg_p1_ena = (status[18:15]==4'd1);
 	
 	wire       lg_p1_sensor;
