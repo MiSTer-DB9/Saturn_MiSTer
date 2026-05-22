@@ -59,6 +59,18 @@ set_global_assignment -name VERILOG_MACRO "MISTER_DISABLE_ALSA=1"
 set_global_assignment -name VERILOG_MACRO "MISTER_DISABLE_YC=1"
 # [MiSTer-DB9 END]
 
+# [MiSTer-DB9 BEGIN] - area synthesis to fit DB9 autodetect FSM.
+# Saturn is LAB-bound on Cyclone V 5CSEBA6 (4,191 LABs ceiling). The OSD-open
+# autodetect probe in sys/joydb.sv adds ~70 ALMs after its own size pass, but
+# Saturn already packs ~9.93 ALMs/LAB so 7 extra ALMs eat 7 LABs we don't
+# have. Flipping synthesis from SPEED to AREA lets Quartus collapse common
+# subexpressions and shrink mux trees across the whole design — typically
+# claws back 1-3% ALMs and the LAB count with it, at the cost of slightly
+# worse Fmax slack on non-critical paths (Saturn's SH-2 / VDP1 / SCSP are
+# already heavily pipelined; the prior SPEED setting was conservative).
+set_global_assignment -name OPTIMIZATION_TECHNIQUE AREA
+# [MiSTer-DB9 END]
+
 source sys/sys.tcl
 source sys/sys_analog.tcl
 source files.qip
