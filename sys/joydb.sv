@@ -66,6 +66,18 @@ module joydb
     output logic        joydb_1ena,
     output logic        joydb_2ena,
 
+    // Per-player 6-button pad detect (unified across modes):
+    //   Saturn pads are always 6-btn-shaped -> 1 whenever joy_saturn_en.
+    //   DB9MD pads are 3- or 6-btn -> tracks joy_db9md_i's protocol-level
+    //   handshake (joy*_is_6btn, latched at state 6).
+    //   DB15 has no top/bottom row geometry -> 0 (consumers that needed a
+    //   row swap for DB15 should not do it).
+    // Consumers like jtcps1's row swap for SF2 use this to disable the
+    // swap on a 3-btn pad so A/B/C still hit button 0..2 in 2-3 button
+    // games (ffight, captcomm, ...).
+    output logic        pad_1_6btn,
+    output logic        pad_2_6btn,
+
     // joy_raw payload (caller wraps with OSD_STATUS guard at hps_io site)
     output logic [15:0] joy_raw
 );
@@ -113,13 +125,16 @@ wire [3:0] JOY_SATURN_IN = use_saturn_in ? {USER_IN[3],USER_IN[5],USER_IN[0],USE
 //----MS ZYXCBAUDLR
 wire        JOY_MDSEL, JOY_SPLIT;
 wire [11:0] JOYDB9MD_1_raw, JOYDB9MD_2_raw;
+wire        JOYDB9MD_1_6btn, JOYDB9MD_2_6btn;
 joy_db9md joy_db9md_i (
-    .clk       ( clk            ),
-    .joy_split ( JOY_SPLIT      ),
-    .joy_mdsel ( JOY_MDSEL      ),
-    .joy_in    ( JOY_MDIN       ),
-    .joystick1 ( JOYDB9MD_1_raw ),
-    .joystick2 ( JOYDB9MD_2_raw )
+    .clk          ( clk             ),
+    .joy_split    ( JOY_SPLIT       ),
+    .joy_mdsel    ( JOY_MDSEL       ),
+    .joy_in       ( JOY_MDIN        ),
+    .joystick1    ( JOYDB9MD_1_raw  ),
+    .joystick2    ( JOYDB9MD_2_raw  ),
+    .joy1_is_6btn ( JOYDB9MD_1_6btn ),
+    .joy2_is_6btn ( JOYDB9MD_2_6btn )
 );
 wire [15:0] JOYDB9MD_1 = {4'b0, JOYDB9MD_1_raw};
 wire [15:0] JOYDB9MD_2 = {4'b0, JOYDB9MD_2_raw};
@@ -263,9 +278,12 @@ always @(posedge clk) begin
         end
         else db15_recover_cnt <= 20'd0;
 
-        // DB15/DB9MD active latch: any button-2 press on either port.
-        if (JOYDB9MD_1[2] | JOYDB15_1[2]) db9_any_ena <= 1'b1;
-        if ((~JOYDB9MD_1[2] & JOYDB9MD_2[2]) | JOYDB15_2[2]) db9_any_ena <= 1'b1;
+        // DB15/DB9MD active latch: any button-2 press on either port. Cleared
+        // when db9md_ena is positively asserted so a positive DB9MD signature
+        // wins over a sticky DB15 latch (e.g. phantom button-2 from a floating
+        // 2P-MUX side during a missed MD handshake).
+        if (JOYDB9MD_1[2] | JOYDB15_1[2] | (~JOYDB9MD_1[2] & JOYDB9MD_2[2]) | JOYDB15_2[2]) db9_any_ena <= 1'b1;
+        else if (db9md_ena) db9_any_ena <= 1'b0;
 
         // Saturn autodetect: idle → settle → probe → settle → ... → active.
         // saturn_any masks JOY_DATA / JOY_MDIN; saturn_mode drives Saturn pins.
@@ -377,6 +395,15 @@ assign joydb_2 = data_sel_saturn ? saturn_p2
 assign joydb_1ena = probe_active | joy_any_en;
 assign joydb_2ena = probe_active | (joy_any_en & joy_2p);
 
+// Per-player 6-button pad presence. Mirrors the data_sel_* mux above so the
+// flag tracks whatever source is actively driving joydb_1 / joydb_2 (probe
+// FSM or user-mode joy_type). Saturn pads are always 6-btn-shaped; DB9MD
+// follows the helper's protocol-level detect; DB15 has no row geometry.
+assign pad_1_6btn = data_sel_saturn
+                  | (data_sel_db9md & JOYDB9MD_1_6btn);
+assign pad_2_6btn = data_sel_saturn
+                  | (data_sel_db9md & JOYDB9MD_2_6btn);
+
 assign USER_OSD  = joydb_1[10] & joydb_1[6];  // Start+C opens OSD
 
 // USER_PP_DRIVE: Saturn-settle (saturn_any & ~saturn_mode) forces all pins to
@@ -393,7 +420,7 @@ assign USER_PP_DRIVE = drive_sel_saturn               ? 8'b01010100
 assign USER_OUT_DRIVE = drive_sel_saturn            ? {1'b1,JOY_SAT_S1,1'b1,JOY_SAT_S0,1'b1,JOY_SAT_SPLIT,2'b11}
                       : (probe_active & saturn_any) ? 8'hFF
                       : drive_sel_db9md             ? {3'b111,JOY_SPLIT,3'b111,JOY_MDSEL}
-                      : drive_sel_db15              ? {6'b111111, JOY_CLK, JOY_LOAD}
+                      : drive_sel_db15              ? {6'b111011, JOY_CLK, JOY_LOAD}
                       :                               8'hFF;
 // [MiSTer-DB9-Pro END]
 
