@@ -494,9 +494,9 @@ joydb joydb (
 	wire [ 15:0] sdram_sz;
 
 	// ZY XMS CBA UDLR
-	// [MiSTer-DB9-Pro BEGIN] - propagate joydb_*[12] (Saturn L_trigger) to joystick_*[12]
-	wire [31:0] joystick_0 = joydb_1ena ? (OSD_STATUS? 32'b000000 : {joydb_1[12],joydb_1[9],joydb_1[8],joydb_1[7],joydb_1[11],joydb_1[10],joydb_1[6:0]}) : joystick_0_USB;
-	wire [31:0] joystick_1 = joydb_2ena ? (OSD_STATUS? 32'b000000 : {joydb_2[12],joydb_2[9],joydb_2[8],joydb_2[7],joydb_2[11],joydb_2[10],joydb_2[6:0]}) : joydb_1ena ? joystick_0_USB : joystick_1_USB;
+	// [MiSTer-DB9-Pro BEGIN] - Layer B: consume the remap matrix (joydb_*_mapped[12:0], incl. Saturn L_trigger at [12]). Factory default from CONF_STR J1 (A,B,C,Start,R,X,Y,Z,L) reproduces the old fixed perm bit-for-bit.
+	wire [31:0] joystick_0 = joydb_1ena ? (OSD_STATUS? 32'b000000 : {19'b0, joydb_1_mapped[12:0]}) : joystick_0_USB;
+	wire [31:0] joystick_1 = joydb_2ena ? (OSD_STATUS? 32'b000000 : {19'b0, joydb_2_mapped[12:0]}) : joydb_1ena ? joystick_0_USB : joystick_1_USB;
 	// [MiSTer-DB9-Pro END]
 	wire [31:0] joystick_2 = joydb_2ena ? joystick_0_USB : joydb_1ena ? joystick_1_USB : joystick_2_USB;
 	wire [31:0] joystick_3 = joydb_2ena ? joystick_1_USB : joydb_1ena ? joystick_2_USB : joystick_3_USB;
