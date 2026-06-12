@@ -422,6 +422,9 @@ joydb joydb (
 		"P2O[76],Swap Joysticks,No,Yes;",
 		"P2O[27],Saturn SNAC,OFF,ON;",
 		"P2O[123],Saturn SNAC Adapter, 2P,1P;",
+		// [MiSTer-DB9-Pro BEGIN] - SNAC P1 device override (Stunner ID through 2P mux)
+		"P2O[124],SNAC P1 Device,Auto,Stunner;",
+		// [MiSTer-DB9-Pro END]
 		"P2O[125],SNAC Players, 1 Player,2 Players;",
 		"P2-;",
 		"D5P2O[18:15],Pad 1,Digital,Virt LGun,Wheel,Mission Stick,3D Pad,Dual Mission,Mouse,Keyboard,Off;",
@@ -814,6 +817,23 @@ joydb joydb (
 	wire snac_2p          = snac & status[125] & ~status[123];  // 0 = scan P1, 1 = SMPC alternates P1/P2 (forced 0 on 1P passive — no P2 jack to alternate to)
 	// [MiSTer-DB9 END]
 
+	// [MiSTer-DB9-Pro BEGIN] - SNAC P1 Device = Stunner (manual ID override)
+	// The Stunner ties D1/D0 low and leaves D3/D2 floating, relying on
+	// console-side pull-ups (rtl/hps2pad.sv PAD_VIRT_LGUN comment). On the 2P
+	// mux adapter the gun's D-lines terminate at the 74HC157D inputs, which
+	// have no pull-ups, and the FPGA's pull-ups are stranded behind the mux's
+	// driven outputs -- D3/D2 read low, MD_ID computes 0x0 instead of 0xA and
+	// games never detect the gun. The ID nibble is the only thing the Stunner
+	// ever puts on the D-lines and it is a known constant (4'b1100), so when
+	// the user selects Stunner we substitute it instead of reading it. Manual
+	// like the Adapter selector: through the mux an empty jack is
+	// indistinguishable from the gun's driven-low D1/D0, so auto-forcing 0xA
+	// would present a phantom gun to gun-aware games on every empty port.
+	// SENSOR/Start/Trigger ride TH/TR/TL (bused / P1-TL jumper, never muxed)
+	// and stay live. Tradeoff: a regular pad in P1 mis-IDs while this is set.
+	wire snac_p1_stunner  = snac & status[124];
+	// [MiSTer-DB9-Pro END]
+
 	// [MiSTer-DB9 BEGIN] - 2P split-select tracker (74HC157D mux SEL on USER_IO[2])
 	// Detects writes to each port's {DDR, PDR_O} to track which port SMPC is
 	// scanning. DDR change at PS_ID1_0 settles snac_split before the first
@@ -823,12 +843,25 @@ joydb joydb (
 	// (Swap Joysticks) for physical-to-logical mapping.
 	reg        snac_split;
 	reg [13:0] last_p1, last_p2;
+	// Scan-idle qualifier for the Stunner async bypass below: saturates ~152us
+	// (2^13 clk_sys at the default 53.7MHz dot-clock; ~143us in 352-px 57.3MHz
+	// mode) after the last {DDR, PDR_O} write -- comfortably past the longest
+	// intra-scan PORT_DELAY gap (~61us at 4MHz SMPC_CE, PS_START port1 = 245
+	// ticks) yet a fraction of a frame, so the bypass is off throughout an
+	// INTBACK scan and on for the whole active-display period where the gun's
+	// light pulses occur.
+	reg [12:0] snac_scan_idle_cnt;
+	wire       snac_scan_idle = &snac_scan_idle_cnt;
+	wire       p1_changed = {SMPC_DDR1, SMPC_PDR1O} != last_p1;
+	wire       p2_changed = {SMPC_DDR2, SMPC_PDR2O} != last_p2;
 	always @(posedge clk_sys) begin
 		last_p1 <= {SMPC_DDR1, SMPC_PDR1O};
 		last_p2 <= {SMPC_DDR2, SMPC_PDR2O};
 		if (~snac_2p)                                snac_split <= 1'b0;
-		else if ({SMPC_DDR1, SMPC_PDR1O} != last_p1) snac_split <= 1'b0;
-		else if ({SMPC_DDR2, SMPC_PDR2O} != last_p2) snac_split <= 1'b1;
+		else if (p1_changed) snac_split <= 1'b0;
+		else if (p2_changed) snac_split <= 1'b1;
+		if (p1_changed || p2_changed)  snac_scan_idle_cnt <= '0;
+		else if (~snac_scan_idle)      snac_scan_idle_cnt <= snac_scan_idle_cnt + 1'd1;
 	end
 	// [MiSTer-DB9 END]
 
@@ -839,22 +872,53 @@ joydb joydb (
 	// MD_ID=0x5 which P2's empty/digital jack won't produce.
 	reg  [6:0] USERJOYSTICK_P1, USERJOYSTICK_P2;
 	wire [6:0] snac_pdrO_active = snac_split ? SMPC_PDR2O : SMPC_PDR1O;
+	// Mid-frame (scan-idle) the shared TH/TR strobe bus must not be sourced
+	// from the parked port: a digital-pad INTBACK leaves that port's PDR_O
+	// TH/TR driven low (PS_DPAD_2, never restored), and with a gun game P1
+	// runs in IOSEL direct mode so SMPC never scans it -- snac_split parks at
+	// P2 permanently and the FPGA would hold shared TH/TR low all frame,
+	// jamming the Stunner's open-collector SENSOR (TH) and START (TR).
+	// While no scan is in flight, source the bus from P1's *effective*
+	// open-drain drive (~DDR1 | PDR1O): input bits read released, and PDR1O
+	// stays game-owned on an IOSEL'd gun port. Scan windows are unchanged
+	// (the idle counter resets on the first {DDR, PDR_O} write, well before
+	// PS_ID1_0 strobes after PS_START's 224/245-tick delay).
+	wire [6:0] snac_pdrO_eff1   = ~SMPC_DDR1 | SMPC_PDR1O;
+	wire [6:0] snac_pdrO_drv    = (snac_2p & snac_scan_idle) ? snac_pdrO_eff1 : snac_pdrO_active;
 	wire       snac_tl_in       = snac_mux_adapter ? USER_IN[7] : USER_IN[2];
 	wire       io2_drive        = snac_mux_adapter ? (snac_split ^ status[76]) : snac_pdrO_active[4];
 	wire [6:0] user_in_remap    = {USER_IN[4], USER_IN[6], snac_tl_in,
 	                                USER_IN[3], USER_IN[5], USER_IN[0], USER_IN[1]};
 	always @(posedge clk_sys) begin
 		if (snac) begin
-			USER_OUT <= {snac_pdrO_active[4],   // IO[7]: 2P-mod TL
-			             snac_pdrO_active[5],   // IO[6]: TR
-			             snac_pdrO_active[2],   // IO[5]: D2
-			             snac_pdrO_active[6],   // IO[4]: TH
-			             snac_pdrO_active[3],   // IO[3]: D3
+			USER_OUT <= {snac_pdrO_drv[4],      // IO[7]: 2P-mod TL
+			             snac_pdrO_drv[5],      // IO[6]: TR
+			             snac_pdrO_drv[2],      // IO[5]: D2
+			             snac_pdrO_drv[6],      // IO[4]: TH
+			             snac_pdrO_drv[3],      // IO[3]: D3
 			             io2_drive,             // IO[2]: 2P mux SEL / 1P TL
-			             snac_pdrO_active[0],   // IO[1]: D0
-			             snac_pdrO_active[1]};  // IO[0]: D1
-			if (~snac_split) USERJOYSTICK_P1 <= user_in_remap;
+			             snac_pdrO_drv[0],      // IO[1]: D0
+			             snac_pdrO_drv[1]};     // IO[0]: D1
+			// [MiSTer-DB9-Pro BEGIN] - SNAC P1 Device=Stunner forces the gun's
+			// constant ID nibble (see snac_p1_stunner decl for rationale)
+			if (~snac_split) USERJOYSTICK_P1 <= snac_p1_stunner ? {user_in_remap[6:4], 4'b1100}
+			                                                    : user_in_remap;
+			// [MiSTer-DB9-Pro END]
 			else             USERJOYSTICK_P2 <= user_in_remap;
+			// Stunner async bypass: SENSOR on TH (combinational EXL_N -> VDP2
+			// HV latch in SMPC.sv) and trigger/START on TR/TL fire mid-frame,
+			// outside any scan window, while snac_split parks at the
+			// last-scanned port (P2) -- without this the P1 gun's beam pulse
+			// never reaches PDR1I[6]. TH/TR/TL are shared bus wires on the
+			// 2P-mod adapter (only D0-D3 go through the 74HC157D mux), so
+			// mirror them into BOTH port latches whenever no scan is in
+			// flight; the idle holdoff keeps the other port's INTBACK TH/TR
+			// strobes from leaking false EXL latches (the beam can't pulse
+			// during vblank, so the holdoff costs nothing).
+			if (snac_scan_idle) begin
+				USERJOYSTICK_P1[6:4] <= user_in_remap[6:4];
+				USERJOYSTICK_P2[6:4] <= user_in_remap[6:4];
+			end
 		end else begin
 			USER_OUT <= USER_OUT_DRIVE;
 		end
