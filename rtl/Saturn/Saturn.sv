@@ -87,6 +87,9 @@ module Saturn
 	output     [ 6: 0] SMPC_PDR1O,
 	output     [ 6: 0] SMPC_DDR1,
 	input      [ 6: 0] SMPC_PDR2I,
+	// [MiSTer-DB9 BEGIN] - SNAC mode flag, gates the SMPC empty/phantom-port guard
+	input              SMPC_SNAC,
+	// [MiSTer-DB9 END]
 	output     [ 6: 0] SMPC_PDR2O,
 	output     [ 6: 0] SMPC_DDR2,
 	
@@ -736,6 +739,9 @@ module Saturn
 		.PDR1O(SMPC_PDR1O),
 		.DDR1(SMPC_DDR1),
 		.PDR2I(SMPC_PDR2I),
+		// [MiSTer-DB9 BEGIN] - SNAC empty/phantom-port guard enable
+		.SNAC(SMPC_SNAC),
+		// [MiSTer-DB9 END]
 		.PDR2O(SMPC_PDR2O),
 		.DDR2(SMPC_DDR2)
 	);

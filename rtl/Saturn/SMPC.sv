@@ -37,6 +37,9 @@ module SMPC (
 	output reg [ 6: 0] PDR1O,
 	output reg [ 6: 0] DDR1,
 	input      [ 6: 0] PDR2I,
+	// [MiSTer-DB9 BEGIN] - SNAC mode flag: gates the SNAC empty/phantom-port guard below
+	input              SNAC,
+	// [MiSTer-DB9 END]
 	output reg [ 6: 0] PDR2O,
 	output reg [ 6: 0] DDR2
 );
@@ -244,7 +247,13 @@ module SMPC (
 		bit [ 3: 0] PORT_DATA_CNT;
 		bit [ 3: 0] MD_ID;
 		bit [ 7: 0] ID2;
-		
+		// [MiSTer-DB9 BEGIN] - SNAC presence-debounce + per-port scan-budget state
+		bit [ 1: 0] PRES_CNT [0:1];   // per-port consecutive *same* plausible-MD_ID count (SNAC)
+		bit [ 3: 0] PRES_ID  [0:1];   // per-port last MD_ID seen (same-value debounce)
+		bit [11: 0] PORT_WD;          // per-port scan budget, counts in CE ticks (PORT_DELAY domain)
+		bit         PORT_NUM_PREV;    // detect port advance to reload the budget
+		// [MiSTer-DB9 END]
+
 		if (!RST_N) begin
 			COMREG <= '0;
 			SR <= '0;
@@ -282,6 +291,12 @@ module SMPC (
 			VBLANK_PEND <= 0;
 			
 			PORT_ST <= PS_IDLE;
+			// [MiSTer-DB9 BEGIN] - SNAC guard / scan-budget reset
+			PRES_CNT      <= '{2{2'd0}};
+			PRES_ID       <= '{2{4'd0}};
+			PORT_WD       <= 12'd2047;
+			PORT_NUM_PREV <= 1'b0;
+			// [MiSTer-DB9 END]
 		end
 		else if (!MRES_N) begin
 			MSHRES_N <= 1;
@@ -307,8 +322,14 @@ module SMPC (
 			CHECK_CONTINUE <= 0;
 			INTBACK_BREAK_PEND <= 0;
 			VBLANK_PEND <= 0;
-			
+
 			PORT_ST <= PS_IDLE;
+			// [MiSTer-DB9 BEGIN] - SNAC guard / scan-budget reset
+			PRES_CNT      <= '{2{2'd0}};
+			PRES_ID       <= '{2{4'd0}};
+			PORT_WD       <= 12'd2047;
+			PORT_NUM_PREV <= 1'b0;
+			// [MiSTer-DB9 END]
 		end else begin
 			OREG_RAM_WE <= 0;
 			
@@ -894,6 +915,28 @@ module SMPC (
 					end
 					
 					PS_TYPE_SEL: begin
+						// [MiSTer-DB9 BEGIN] - SNAC empty/phantom-port guard. Debounce the
+						// native MD_ID requiring the SAME plausible ID on consecutive scans:
+						// a floating jack (74HC157D, no pull-ups) yields noisy/inconsistent
+						// IDs so it never confirms -> routes to PS_NOTHING_STUNNER (clean
+						// "no device", fast) instead of injecting phantom digital input or
+						// entering the no-timeout MOUSE/ID5/ANALOG TL handshake that churns
+						// and starves the other port's scan. P1 (PORT_NUM=0) accepts digital
+						// (B) / 3D-analog (5) / mouse (3); P2 (PORT_NUM=1) is digital-only --
+						// the 2P-mux adapter does not jumper P2's TL line, so analog/mouse on
+						// P2 are physically impossible. Non-SNAC (HPS2PAD/USB) path unchanged.
+						if (SNAC) begin
+							if ((MD_ID == 4'hB || (!PORT_NUM && (MD_ID == 4'h5 || MD_ID == 4'h3)))
+							     && MD_ID == PRES_ID[PORT_NUM]) begin
+								if (PRES_CNT[PORT_NUM] != 2'd3) PRES_CNT[PORT_NUM] <= PRES_CNT[PORT_NUM] + 2'd1;
+							end else
+								PRES_CNT[PORT_NUM] <= 2'd0;
+							PRES_ID[PORT_NUM] <= MD_ID;
+						end
+						if (SNAC && (PRES_CNT[PORT_NUM] < 2'd2 || (PORT_NUM && MD_ID != 4'hB)))
+							PORT_ST <= PS_NOTHING_STUNNER;
+						else
+						// [MiSTer-DB9 END]
 						if (MD_ID == 4'hB)
 							PORT_ST <= PS_DPAD_0;
 //						else if (MD_ID == 4'hD)
@@ -1144,7 +1187,26 @@ module SMPC (
 						PORT_ST <= PS_IDLE;
 					end
 				endcase
-				
+
+				// [MiSTer-DB9 BEGIN] - INTBACK per-PORT scan-time budget. Guarantees the
+				// FSM advances to (and back from) every port each INTBACK so the 2P-mux SEL
+				// tracker (snac_split in Saturn.sv) always reaches P2: an empty/floating P1
+				// that churns a phantom MOUSE/ID5/ANALOG handshake (advancing on a noisy TL,
+				// so a per-state watchdog never bails) can no longer eat the whole optimized
+				// INTBACK window and starve the P2 scan. The budget reloads only when the
+				// scanned port changes (or a fresh INTBACK) -- NOT on intra-scan state churn
+				// -- so an advancing phantom cannot keep it alive; it is sized above the
+				// longest legit single-port scan (real 3D-analog ~1100 CE ticks) and below
+				// the INTBACK window, so it never truncates a real pad. SNAC-gated; PS_IDLE/
+				// PS_NEXT/PS_END excluded so it can't start a spurious scan between INTBACKs.
+				PORT_NUM_PREV <= PORT_NUM;
+				if (PORT_NUM != PORT_NUM_PREV || JOY_START) PORT_WD <= 12'd2047;
+				else if (PORT_WD)                           PORT_WD <= PORT_WD - 12'd1;
+				if (SNAC && PORT_WD == 12'd0 &&
+				    PORT_ST != PS_IDLE && PORT_ST != PS_NEXT && PORT_ST != PS_END)
+					PORT_ST <= PS_NEXT;
+				// [MiSTer-DB9 END]
+
 				if (JOY_START) begin
 					PORT_NUM <= 0;
 					PORT_ST <= PS_START;

@@ -182,11 +182,23 @@ module emu
 // from the FPGA -- matches real Saturn SMPC's open-drain electrical behavior.
 // Digital 6-button and 3D Pad inputs see clean transitions via FPGA internal
 // pull-ups (~25kOhm × ~50pF -> ~125ns settle, vs Saturn scan ~143us/phase).
-// Only IO[2] differs: in 2P-with-mux mode it must be push-pull to drive the
-// 74HC157D mux SEL; in 1P passive it stays open-drain (TL line).
-assign USER_PP = snac_mux_adapter ? 8'b00000100
-               : snac             ? 8'b00000000
-               :                    USER_PP_DRIVE;
+// IO[2] is push-pull only in 2P-with-mux mode to drive the 74HC157D mux SEL;
+// in 1P passive it stays open-drain (TL line). TH(IO[4])/TR(IO[6]) are also
+// push-pull in non-Stunner SNAC modes -- see below.
+//
+// TH(IO[4])/TR(IO[6]) are push-pull for digital / 3D pads: the SMPC PS_DPAD_1
+// read is the ONLY pad read that needs a TH 0->1 rise, and an open-drain rise
+// (weak pull-up + real SNAC-cable/adapter/pad capacitance) can lag past the
+// PORT_DELAY sample point -- PS_DPAD_1 then latches the prior {TH0,TR0} nibble
+// (R,X,Y,Z) into the Start/A/C/B slots, scrambling buttons (R->Start, A/B/C
+// dead). Push-pull selects remove the rise-time dependency (same as the working
+// DB9-Saturn path, USER_PP_DRIVE term 8'b01010100). Keep selects open-drain when
+// a Stunner is selected so its open-collector SENSOR(TH)/START(TR) can pull low
+// without FPGA contention. D-lines + TL stay open-drain (pad / 3D-pad analog
+// handshake / gun drive them).
+assign USER_PP = !snac            ? USER_PP_DRIVE
+               : snac_mux_adapter ? (snac_p1_stunner ? 8'b00000100 : 8'b01010100)  // 2P: IO[2] mux SEL always push-pull
+               :                    (snac_p1_stunner ? 8'b00000000 : 8'b01010000); // 1P passive: TH/TR push-pull, IO[2]=TL open-drain
 // [MiSTer-DB9 END]
 	assign ADC_BUS  = 'Z;
 
@@ -852,9 +864,11 @@ joydb joydb (
 
 	// [MiSTer-DB9 BEGIN] - per-port USER_IN latches + active-port USER_OUT mux
 	// In 2P-mux mode PDR2I[4] aliases PDR1I[4] (only P1's TL is jumpered to
-	// IO[7] on the 2P-mod adapter). Benign: SMPC's MD_ID uses PDR_I[3:0] only,
-	// and PS_ID5_*/PS_ANALOG_* (the only states reading PDR_I[4]) require
-	// MD_ID=0x5 which P2's empty/digital jack won't produce.
+	// IO[7] on the 2P-mod adapter). SMPC's MD_ID uses PDR_I[3:0] only; the
+	// PS_ID5_*/PS_ANALOG_* states that read PDR_I[4] are only reached if a
+	// garbage MD_ID=0x5/0x3 is read off an *empty* floating P2 jack -- the SNAC
+	// empty/phantom-port guard in rtl/Saturn/SMPC.sv (PS_TYPE_SEL presence
+	// debounce + INTBACK watchdog) keeps that case out of those states.
 	reg  [6:0] USERJOYSTICK_P1, USERJOYSTICK_P2;
 	wire [6:0] snac_pdrO_active = snac_split ? SMPC_PDR2O : SMPC_PDR1O;
 	// Mid-frame (scan-idle) the shared TH/TR strobe bus must not be sourced
@@ -874,6 +888,7 @@ joydb joydb (
 	wire       io2_drive        = snac_mux_adapter ? (snac_split ^ status[76]) : snac_pdrO_active[4];
 	wire [6:0] user_in_remap    = {USER_IN[4], USER_IN[6], snac_tl_in,
 	                                USER_IN[3], USER_IN[5], USER_IN[0], USER_IN[1]};
+
 	always @(posedge clk_sys) begin
 		if (snac) begin
 			USER_OUT <= {snac_pdrO_drv[4],      // IO[7]: 2P-mod TL
@@ -889,6 +904,10 @@ joydb joydb (
 			if (~snac_split) USERJOYSTICK_P1 <= snac_p1_stunner ? {user_in_remap[6:4], 4'b1100}
 			                                                    : user_in_remap;
 			// [MiSTer-DB9-Pro END]
+			// Empty/floating P2 jack is now handled SMPC-side (SNAC empty/phantom-port
+			// guard + INTBACK watchdog in rtl/Saturn/SMPC.sv): a garbage MD_ID can no
+			// longer hang INTBACK or inject phantom P2 input, so the latch is a plain
+			// pass-through.
 			else             USERJOYSTICK_P2 <= user_in_remap;
 			// Stunner async bypass: SENSOR on TH (combinational EXL_N -> VDP2
 			// HV latch in SMPC.sv) and trigger/START on TR/TL fire mid-frame,
@@ -978,7 +997,7 @@ joydb joydb (
 	wire [ 6: 0] SMPC_PDR2I;
 	wire [ 6: 0] SMPC_PDR2O;
 	wire [ 6: 0] SMPC_DDR2;
-	
+
 	wire         CD_CDATA;
 	wire         CD_HDATA;
 	wire         CD_COMCLK;
@@ -1171,6 +1190,13 @@ joydb joydb (
 `else
 		.SMPC_PDR2I({6'b111111,STV_EEP_DO}),
 `endif
+		// [MiSTer-DB9 BEGIN] - enable the SMPC empty/phantom-port guard in SNAC mode (off for ST-V)
+`ifndef STV_BUILD
+		.SMPC_SNAC(snac),
+`else
+		.SMPC_SNAC(1'b0),
+`endif
+		// [MiSTer-DB9 END]
 		.SMPC_PDR2O(SMPC_PDR2O),
 		.SMPC_DDR2(SMPC_DDR2),
 		
