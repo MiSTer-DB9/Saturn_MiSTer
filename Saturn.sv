@@ -268,11 +268,11 @@ joydb joydb (
 	assign VGA_DISABLE = 0;
 	
 `ifndef STV_BUILD
-    assign LED_DISK  = CD_BUF_RD;
-    assign LED_USER  = bk_state;
+	assign LED_DISK  = cdd_download;
+	assign LED_USER  = sav_pending;
 `else
 	assign LED_DISK  = 0;
-    assign LED_USER  = 0;
+	assign LED_USER  = 0;
 `endif    
 	assign LED_POWER = 0;
 	assign VGA_SCALER= 0;
@@ -468,7 +468,7 @@ joydb joydb (
 	wire [ 13:0] joystick_0_USB,joystick_1_USB,joystick_2_USB,joystick_3_USB,joystick_4_USB;
 	wire [  7:0] joy0_x0,joy0_y0,joy0_x1,joy0_y1,joy1_x0,joy1_y0,joy1_x1,joy1_y1;
 	wire         ioctl_download,ioctl_upload;
-	wire         ioctl_upload_req = 0;
+	wire         ioctl_upload_req;
 	wire         ioctl_wr,ioctl_rd;
 	wire [ 25:0] ioctl_addr;
 	wire [ 15:0] ioctl_data,ioctl_din;
@@ -2201,6 +2201,7 @@ joydb joydb (
 	end
 
 	assign sd_buff_din = tmpram_sd_buff_q; 
+	assign ioctl_upload_req = 0;
 `else
 	wire bk_change  = (~SRAM_CS_N & ~MEM_DQM_N[0]);
 	wire bk_load    = status[24];
